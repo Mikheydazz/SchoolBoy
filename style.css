@@ -1,0 +1,436 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+body {
+  background: #0e1a24;
+  overflow: hidden;
+  font-family: 'Segoe UI', Arial, sans-serif;
+}
+
+/* ---------- HUD ---------- */
+#hud {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  color: #ffeecc;
+  font-weight: 900;
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 2px 2px 0 #3a2e1e;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.panel {
+  background: rgba(20, 30, 40, 0.8);
+  border-radius: 30px;
+  padding: 8px 18px;
+  box-shadow: inset 0 -4px 0 #0c1317, 0 5px 0 #0b1114;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+}
+
+#weaponPanel {
+  background: rgba(40, 25, 55, 0.85);
+  color: #ffd0a0;
+}
+
+.bar {
+  width: 140px;
+  height: 16px;
+  background: #3a2525;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: inset 0 3px 6px #000a;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #d43f3f, #ff7070);
+  transition: width 0.15s;
+}
+
+.bar.xp {
+  height: 12px;
+}
+
+.bar.xp span {
+  background: linear-gradient(90deg, #4fc3f7, #b3e5fc);
+  width: 0;
+}
+
+/* ---------- Кнопка рестарта ---------- */
+#restart {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #dcb571;
+  border: none;
+  padding: 10px 28px;
+  font-weight: 900;
+  font-size: 18px;
+  border-radius: 30px;
+  color: #1e2a1e;
+  cursor: pointer;
+  box-shadow: 0 6px 0 #8f6f3c, 0 8px 12px #000;
+  z-index: 20;
+  font-family: inherit;
+  letter-spacing: 1px;
+  transition: 0.05s linear;
+}
+
+#restart:active {
+  transform: translateX(-50%) translateY(4px);
+  box-shadow: 0 2px 0 #8f6f3c;
+}
+
+/* ---------- Подсказка ---------- */
+#hint {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #cfdde6;
+  font-weight: 700;
+  font-size: 14px;
+  opacity: 0.85;
+  text-shadow: 2px 2px 0 #000;
+  z-index: 10;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ---------- Миникарта ---------- */
+#minimap {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: 220px;
+  height: 220px;
+  border-radius: 16px;
+  border: 3px solid #6b5a3e;
+  background: rgba(20, 30, 40, 0.85);
+  box-shadow: inset 0 0 0 2px #0c1317, 0 8px 0 #0b1114, 0 12px 20px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
+/* ---------- Модалка прокачки ---------- */
+#levelup {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 14, 20, 0.88);
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  color: #ffeecc;
+  gap: 20px;
+}
+
+#levelup.active {
+  display: flex;
+}
+
+#levelup h1 {
+  color: #ffd966;
+  font-size: 42px;
+  letter-spacing: 2px;
+  text-shadow: 4px 4px 0 #3a2e1e;
+}
+
+/* ---------- Модалка выбора оружия ---------- */
+#weaponchoice {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(40, 20, 60, 0.9), rgba(8, 6, 16, 0.96));
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 110;
+  color: #ffeecc;
+  gap: 16px;
+  padding: 30px;
+  text-align: center;
+}
+
+#weaponchoice.active {
+  display: flex;
+  animation: fadeIn 0.3s ease-out;
+}
+
+#weaponchoice h1 {
+  color: #ffd966;
+  font-size: 46px;
+  letter-spacing: 3px;
+  text-shadow: 4px 4px 0 #3a2e1e, 0 0 30px rgba(255, 200, 80, 0.4);
+}
+
+#weaponchoice .subtitle {
+  color: #cfdde6;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+#weaponchoice .cards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 1100px;
+}
+
+.weapon-card {
+  background: linear-gradient(160deg, #4a3a5e, #241a30);
+  border: 4px solid #6b5a3e;
+  border-radius: 20px;
+  padding: 18px 16px;
+  width: 200px;
+  cursor: pointer;
+  text-align: center;
+  transition: 0.12s;
+  box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000;
+  position: relative;
+}
+
+.weapon-card:hover {
+  transform: translateY(-6px);
+  border-color: #ffd966;
+  box-shadow: 0 14px 0 #0b1114, 0 18px 26px #000;
+}
+
+.weapon-card:active {
+  transform: translateY(0);
+}
+
+.weapon-card.owned {
+  border-color: #ffd966;
+  background: linear-gradient(160deg, #5a4a2e, #2e2410);
+}
+
+.weapon-card .wico {
+  font-size: 44px;
+  line-height: 1;
+  filter: drop-shadow(2px 3px 0 #00000088);
+}
+
+.weapon-card .wname {
+  color: #ffd966;
+  font-size: 18px;
+  font-weight: 900;
+  margin: 8px 0 4px;
+  letter-spacing: 0.5px;
+}
+
+.weapon-card .wlevel {
+  color: #ffb060;
+  font-size: 13px;
+  font-weight: 900;
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+
+.weapon-card .wdesc {
+  color: #b8c9d6;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.weapon-card .wupgrade {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 10px;
+  background: #4fc3f7;
+  color: #0a1a24;
+  font-size: 11px;
+  font-weight: 900;
+  border-radius: 20px;
+  letter-spacing: 1px;
+}
+
+#skipWeapon {
+  background: transparent;
+  border: 3px solid #6b5a3e;
+  color: #cfdde6;
+  padding: 12px 36px;
+  font-size: 16px;
+  font-weight: 900;
+  border-radius: 30px;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 1px;
+  margin-top: 12px;
+  transition: 0.12s;
+}
+
+#skipWeapon:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #ffd966;
+  color: #ffd966;
+}
+
+/* ---------- Экран проигрыша ---------- */
+#gameover {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(60, 10, 10, 0.85), rgba(8, 4, 4, 0.95));
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 200;
+  color: #ffeecc;
+  gap: 18px;
+  text-align: center;
+  padding: 30px;
+  backdrop-filter: blur(4px);
+}
+
+#gameover.active {
+  display: flex;
+  animation: fadeIn 0.35s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+#gameover h1 {
+  font-size: 88px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  color: #ff5544;
+  text-shadow:
+    0 0 20px rgba(255, 60, 40, 0.6),
+    5px 5px 0 #4a1010,
+    8px 8px 20px #000;
+  margin: 0;
+  animation: pulseLoss 1.6s ease-in-out infinite;
+}
+
+@keyframes pulseLoss {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+
+#gameover .subtitle {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffbdb0;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+
+#gameover .stats {
+  display: flex;
+  gap: 40px;
+  margin-top: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+#gameover .stat {
+  background: rgba(20, 30, 40, 0.7);
+  border: 3px solid #6b5a3e;
+  border-radius: 20px;
+  padding: 14px 28px;
+  min-width: 140px;
+  box-shadow: 0 6px 0 #0b1114, 0 10px 20px rgba(0, 0, 0, 0.6);
+}
+
+#gameover .stat .label {
+  font-size: 13px;
+  color: #cfdde6;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+#gameover .stat .value {
+  font-size: 32px;
+  font-weight: 900;
+  color: #ffd966;
+}
+
+#gameover button {
+  background: #dcb571;
+  border: none;
+  padding: 14px 44px;
+  font-weight: 900;
+  font-size: 22px;
+  border-radius: 30px;
+  color: #1e2a1e;
+  cursor: pointer;
+  box-shadow: 0 6px 0 #8f6f3c, 0 8px 12px #000;
+  font-family: inherit;
+  letter-spacing: 1px;
+  transition: 0.05s linear;
+  margin-top: 10px;
+}
+
+#gameover button:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 #8f6f3c;
+}
+
+/* Карточки в levelup (старые стили) */
+.cards {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.card {
+  background: linear-gradient(160deg, #3b4f5e, #1e2b32);
+  border: 4px solid #6b5a3e;
+  border-radius: 20px;
+  padding: 20px;
+  width: 200px;
+  cursor: pointer;
+  text-align: center;
+  transition: 0.12s;
+  box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000;
+}
+
+.card:hover {
+  transform: translateY(-6px);
+  border-color: #ffd966;
+}
+
+.card .ico {
+  font-size: 42px;
+}
+
+.card .name {
+  color: #ffd966;
+  font-size: 19px;
+  font-weight: 900;
+  margin: 8px 0 4px;
+}
+
+.card .desc {
+  color: #b8c9d6;
+  font-size: 13px;
+  font-weight: 600;
+}

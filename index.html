@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Школьник Грифоня 3D</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="hud">
+    <div class="panel">❤️ <div class="bar"><span id="hpBar"></span></div></div>
+    <div class="panel">⭐ <div class="bar xp"><span id="xpBar"></span></div> Ур. <b id="lvl">1</b></div>
+    <div class="panel">🍔 <span id="score">0</span></div>
+    <div class="panel" id="weaponPanel">📚 <span id="weaponInfo">—</span></div>
+  </div>
+
+  <canvas id="minimap" width="220" height="220"></canvas>
+
+  <button id="restart">ЗАНОВО</button>
+  <div id="hint">WASD / стрелки — движение · ПРОБЕЛ — удар · Q — применить оружие</div>
+
+  <div id="levelup">
+    <h1>УРОВЕНЬ ПОВЫШЕН!</h1>
+    <div class="cards" id="cards"></div>
+  </div>
+
+  <div id="weaponchoice">
+    <h1>ВЫБОР ОРУЖИЯ</h1>
+    <div class="subtitle">Каждые 5 уровней можно взять новое оружие или улучшить старое</div>
+    <div class="cards" id="weaponCards"></div>
+    <button id="skipWeapon">НЕ БРАТЬ ОРУЖИЕ</button>
+  </div>
+
+  <div id="gameover">
+    <h1>ВЫ ПРОИГРАЛИ</h1>
+    <div class="subtitle">Грифоню завалили учебниками...</div>
+    <div class="stats">
+      <div class="stat">
+        <div class="label">Уровень</div>
+        <div class="value" id="finalLevel">1</div>
+      </div>
+      <div class="stat">
+        <div class="label">Очки</div>
+        <div class="value" id="finalScore">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">Убито</div>
+        <div class="value" id="finalKills">0</div>
+      </div>
+    </div>
+    <button id="gameoverRestart">ПОПРОБОВАТЬ СНОВА</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="game.js"></script>
+
+</body>
+</html>
