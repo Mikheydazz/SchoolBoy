@@ -525,21 +525,29 @@ const WEAPONS = [
     cooldown: [800, 720, 640, 560, 480],
     range: 32,
   },
-    {
+  {
     id: 'hammer',
     name: 'Молот',
     ico: '🔨',
-    desc: 'Раз в 10 секунд бьёт героя и на 4 сек делает его красивым: ×1.3 к скорости и высоте прыжка.',
+    desc: 'Раз в 10 сек делает героя красивым. Каждое срабатывание чуть усиливает баф. Со 2 ур. — двойной Shift даёт удар молотом по площади.',
     color: 0x8a6a3a,
     maxLevel: 5,
-    // Кулдаун между ударами (мс)
-    cooldown:  [10000, 9500, 9000, 8500, 8000],
-    // Длительность бафа (сек)
-    duration:  [4, 4.5, 5, 5.5, 6],
-    // Множитель скорости
-    speedMult: [1.3, 1.4, 1.5, 1.6, 1.75],
-    // Множитель высоты прыжка
-    jumpMult:  [1.3, 1.4, 1.5, 1.6, 1.75],
+    // Авто-баф — одинаковый на всех уровнях
+    autoCooldown: 10000,
+    baseDuration: 4,
+    baseSpeedMult: 1.3,
+    baseJumpMult: 1.3,
+    // Рост от стаков (каждое срабатывание)
+    stackDurationBonus: 0.2,
+    stackMultBonus: 0.02,
+    maxDuration: 8,
+    maxMult: 2.2,
+    // Активная способность (открывается на 2 ур.)
+    // Индексы: [ур.1, ур.2, ур.3, ур.4, ур.5]
+    // Ур.1 не используется (слам ещё не открыт), но нужен для правильного смещения
+    slamCooldown:   [0,   6000, 5000, 4000, 3000],
+    slamDamageMult: [0,   7.0,  9.0,  12.0, 15.0],
+    slamRadius:     [0,   7.0,  8.0,  9.0,  10.0],
   },
 ];
 
@@ -572,10 +580,25 @@ const weaponTimers = {
 // =====================================================
 //  СОСТОЯНИЕ ПРЕВРАЩЕНИЯ (от молота)
 // =====================================================
-let heroTransformTimer = 0;         // секунд до конца бафа
-let heroTransformSpeedMult = 1.3;   // текущий множитель скорости
-let heroTransformJumpMult = 1.3;    // текущий множитель прыжка
-let hammerSwingTimer = 0;           // таймер анимации удара молотом
+let heroTransformTimer = 0;
+let heroTransformSpeedMult = 1.3;
+let heroTransformJumpMult = 1.3;
+let hammerSwingTimer = 0;
+
+// Стаки авто-бафа — каждое срабатывание молота усиливает следующий баф
+let hammerStacks = 0;
+
+// Активная способность — удар молотом (со 2 уровня)
+let lastShiftTime = 0;
+let hammerSlamCooldown = 0;
+const hammerSlamState = {
+  active: false,
+  timer: 0,
+  duration: 0.7,
+  damage: 0,
+  radius: 0,
+  landed: false,
+};
 
 let bagAngle = 0;
 const projectiles = [];
@@ -794,15 +817,28 @@ function revertHeroTransform() {
   sunglasses.visible = false;
 }
 
+let _lastWeaponHudText = '';
 function updateWeaponHud() {
   const info = document.getElementById('weaponInfo');
   const list = [];
   for (const w of WEAPONS) {
     if (equippedWeapons[w.id]) {
-      list.push(`${w.ico}${equippedWeapons[w.id].level}`);
+      let txt = `${w.ico}${equippedWeapons[w.id].level}`;
+      if (w.id === 'hammer' && equippedWeapons.hammer.level >= 2) {
+        if (hammerSlamCooldown > 0) {
+          txt += ` (${(hammerSlamCooldown / 1000).toFixed(1)}с)`;
+        } else {
+          txt += ' ⚡';
+        }
+      }
+      list.push(txt);
     }
   }
-  info.textContent = list.length ? list.join(' ') : '—';
+  const newText = list.length ? list.join(' ') : '—';
+  if (newText !== _lastWeaponHudText) {
+    info.textContent = newText;
+    _lastWeaponHudText = newText;
+  }
 }
 
 function useWeapons(dt) {
@@ -972,17 +1008,31 @@ function useWeapons(dt) {
     // =====================================================
   //  МОЛОТ — раз в N секунд бьёт героя и делает его красивым
   // =====================================================
-  if (equippedWeapons.hammer) {
-    weaponTimers.hammer -= dt * 1000;
-    if (weaponTimers.hammer <= 0) {
-      weaponTimers.hammer = weaponStat('hammer', 'cooldown');
-      heroTransformTimer = weaponStat('hammer', 'duration');
-      heroTransformSpeedMult = weaponStat('hammer', 'speedMult');
-      heroTransformJumpMult = weaponStat('hammer', 'jumpMult');
-      hammerSwingTimer = 0.4;
+    if (equippedWeapons.hammer) {
+    // Авто-баф не срабатывает, пока идёт активный удар
+    if (!hammerSlamState.active) {
+      weaponTimers.hammer -= dt * 1000;
+      if (weaponTimers.hammer <= 0) {
+        const def = WEAPONS.find(w => w.id === 'hammer');
+        weaponTimers.hammer = def.autoCooldown;
 
-      applyHeroTransform();
-      spawnHammerHitEffect(hero.x, hero.z);
+        // Каждое срабатывание — +1 стак, усиливающий баф
+        hammerStacks++;
+        const dur = Math.min(def.maxDuration,
+          def.baseDuration + hammerStacks * def.stackDurationBonus);
+        const sMul = Math.min(def.maxMult,
+          def.baseSpeedMult + hammerStacks * def.stackMultBonus);
+        const jMul = Math.min(def.maxMult,
+          def.baseJumpMult + hammerStacks * def.stackMultBonus);
+
+        heroTransformTimer = dur;
+        heroTransformSpeedMult = sMul;
+        heroTransformJumpMult = jMul;
+        hammerSwingTimer = 0.4;
+
+        applyHeroTransform();
+        spawnHammerHitEffect(hero.x, hero.z);
+      }
     }
 
     // Анимация взмаха
@@ -2085,7 +2135,18 @@ addEventListener('keydown', e => {
   if (c === 'ArrowLeft') keys.left = 1;
   if (c === 'ArrowDown') keys.down = 1;
   if (c === 'ArrowRight') keys.right = 1;
-  if (c === 'ShiftLeft' || c === 'ShiftRight') keys.shift = 1;
+  if (c === 'ShiftLeft' || c === 'ShiftRight') {
+    const now = performance.now();
+    // Двойной Shift → удар молотом (если открыт)
+    if (now - lastShiftTime < 300 && weaponLevel('hammer') >= 2 &&
+        hammerSlamCooldown <= 0 && !hammerSlamState.active) {
+      triggerHammerSlam();
+      lastShiftTime = 0;
+    } else {
+      keys.shift = 1;
+      lastShiftTime = now;
+    }
+  }
   if (c === 'Space') {
     keys.space = 1;
     if (gameActive && !paused) doAttack();
@@ -2710,10 +2771,15 @@ function doAttack() {
   // ============================================================
   //  УДАР В ПРЫЖКЕ — AoE slam
   // ============================================================
-  if (hero.isJumping && hero.height > 0.3) {
+    if (hero.isJumping && hero.height > 0.3) {
     hero.attackTimer = 0.3;
     const radius = stats.radius + JUMP_ATTACK_RADIUS_BONUS;
-    const damage = stats.damage * JUMP_ATTACK_MULT;
+
+    // Урон зависит от высоты прыжка в момент удара:
+    // у земли → ×1 (как обычный удар), в верхней точке → ×JUMP_ATTACK_MULT
+    const maxHeight = JUMP_HEIGHT * (heroTransformTimer > 0 ? heroTransformJumpMult : 1);
+    const heightRatio = Math.min(1, hero.height / maxHeight);
+    const damage = stats.damage * (1 + heightRatio * (JUMP_ATTACK_MULT - 1));
 
     // Направление — на ближайшего
     let nearest = null, nd = Infinity;
@@ -2908,6 +2974,176 @@ function spawnHammerHitEffect(x, z) {
   // Искры
   burst(x, z, 0xffd966);
   burst(x, z, 0xffee88);
+}
+
+// =====================================================
+//  УДАР МОЛОТОМ — активная способность (двойной Shift)
+// =====================================================
+function triggerHammerSlam() {
+  const lvl = weaponLevel('hammer');
+  if (lvl < 2) return;
+  if (hammerSlamCooldown > 0) return;
+  if (hammerSlamState.active) return;
+  if (!gameActive || paused) return;
+
+  const def = WEAPONS.find(w => w.id === 'hammer');
+  hammerSlamState.active = true;
+  hammerSlamState.timer = 0;
+  hammerSlamState.duration = 0.7;
+  hammerSlamState.damage = stats.damage * def.slamDamageMult[lvl - 1];
+  hammerSlamState.radius = def.slamRadius[lvl - 1];
+  hammerSlamState.landed = false;
+
+  // Отменяем текущий прыжок — герой "перепрыгивает" в молот
+  hero.isJumping = false;
+  hero.height = 0;
+  keys.shift = 0;
+
+  // Подсказка игроку — золотая вспышка
+  burst(hero.x, hero.z, 0xffd966);
+}
+
+function updateHammerSlam(dt) {
+  // Откат способности
+  if (hammerSlamCooldown > 0) {
+    hammerSlamCooldown -= dt * 1000;
+    if (hammerSlamCooldown < 0) hammerSlamCooldown = 0;
+  }
+
+  if (!hammerSlamState.active) return;
+
+  hammerSlamState.timer += dt;
+  const t = hammerSlamState.timer / hammerSlamState.duration;
+
+  if (t < 0.5) {
+    // Подъём
+    const phase = t / 0.5;
+    hero.height = Math.sin(phase * Math.PI / 2) * 6.5;
+    // Вращение героя вокруг оси
+    heroGroup.rotation.y += dt * 20;
+  } else {
+    // Падение
+    const phase = (t - 0.5) / 0.5;
+    hero.height = Math.cos(phase * Math.PI / 2) * 6.5;
+    heroGroup.rotation.y += dt * 20;
+  }
+
+  // Анимация рук с молотом — поднимаем над головой
+  if (weaponMeshes.hammer) {
+    const lift = t < 0.5 ? -t * 4 : -2 + (t - 0.5) * 8;
+    weaponMeshes.hammer.position.set(-0.2, 2.5 + Math.abs(lift) * 0.5, 0.3);
+    weaponMeshes.hammer.rotation.z = 0.4 + lift;
+  }
+
+  if (!hammerSlamState.landed && t >= 1) {
+    hammerSlamState.landed = true;
+    const r = hammerSlamState.radius;
+    const dmg = hammerSlamState.damage;
+
+    // AoE урон
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+      if (d < r + e.r) {
+        // Собак не убиваем — отправляем в босса
+        if (e.isDog && boss.active) {
+          e.flyingToBoss = true;
+          e.hp = Infinity;
+          const bdx = boss.x - e.x;
+          const bdz = boss.z - e.z;
+          const bd = Math.hypot(bdx, bdz) || 1;
+          e.flyVx = (bdx / bd) * 40;
+          e.flyVz = (bdz / bd) * 40;
+          continue;
+        }
+        e.hp -= dmg;
+        if (e.hp <= 0) killEnemy(e, i);
+      }
+    }
+
+    // Босс
+    if (boss.active && Math.hypot(boss.x - hero.x, boss.z - hero.z) < r + boss.r) {
+      damageBoss(dmg);
+    }
+
+    // Статуи
+    for (let i = statues.length - 1; i >= 0; i--) {
+      const s = statues[i];
+      if (Math.hypot(s.x - hero.x, s.z - hero.z) < r + s.r) {
+        damageStatue(s, i, dmg);
+      }
+    }
+
+    spawnHammerSlamEffect(hero.x, hero.z, r);
+
+    // Откат способности
+    const def = WEAPONS.find(w => w.id === 'hammer');
+    hammerSlamCooldown = def.slamCooldown[weaponLevel('hammer') - 1];
+
+    hammerSlamState.active = false;
+    hero.height = 0;
+    heroGroup.rotation.y = hero.attackAngle + Math.PI;
+  }
+}
+
+function spawnHammerSlamEffect(x, z, r) {
+  // Расширяющееся золотое кольцо
+  const ringGeo = new THREE.RingGeometry(r * 0.3, r, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffd966, transparent: true, opacity: 1,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.15, z);
+  scene.add(ring);
+
+  const start = performance.now();
+  function animRing() {
+    const t = (performance.now() - start) / 500;
+    if (t >= 1) { scene.remove(ring); return; }
+    const s = 1 + t * 0.5;
+    ring.scale.set(s, s, 1);
+    ringMat.opacity = (1 - t);
+    requestAnimationFrame(animRing);
+  }
+  animRing();
+
+  // Ударная волна — расширяющееся плоское кольцо
+  const shockGeo = new THREE.RingGeometry(r * 0.9, r * 1.05, 40);
+  const shockMat = new THREE.MeshBasicMaterial({
+    color: 0xffee88, transparent: true, opacity: 0.9,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const shock = new THREE.Mesh(shockGeo, shockMat);
+  shock.rotation.x = -Math.PI / 2;
+  shock.position.set(x, 0.1, z);
+  scene.add(shock);
+
+  const start2 = performance.now();
+  function animShock() {
+    const t = (performance.now() - start2) / 400;
+    if (t >= 1) { scene.remove(shock); return; }
+    const s = 1 + t * 1.8;
+    shock.scale.set(s, s, 1);
+    shockMat.opacity = 0.9 * (1 - t);
+    requestAnimationFrame(animShock);
+  }
+  animShock();
+
+  // Взрыв частиц
+  for (let i = 0; i < 3; i++) burst(x, z, 0xffd966);
+  burst(x, z, 0xfff5aa);
+
+  // Тряска экрана
+  cameraShake(0.25);
+}
+
+// Тряска камеры
+let cameraShakeAmount = 0;
+function cameraShake(amount) {
+  cameraShakeAmount = Math.max(cameraShakeAmount, amount);
 }
 
 // =====================================================
@@ -3160,14 +3396,15 @@ function updateJump(dt) {
     if (hero.jumpCooldown < 0) hero.jumpCooldown = 0;
   }
 
-  if (keys.shift && !hero.isJumping && hero.jumpCooldown <= 0 && gameActive && !paused) {
+  if (keys.shift && !hero.isJumping && hero.jumpCooldown <= 0 &&
+      gameActive && !paused && !hammerSlamState.active) {
     hero.isJumping = true;
     hero.jumpTimer = JUMP_DURATION;
     hero.jumpCooldown = Math.max(600, JUMP_COOLDOWN - jumpCooldownBonus);
     keys.shift = 0;
   }
 
-  if (hero.isJumping) {
+    if (hero.isJumping) {
     hero.jumpTimer -= dt;
     const progress = 1 - (hero.jumpTimer / JUMP_DURATION);
     const jumpMul = heroTransformTimer > 0 ? heroTransformJumpMult : 1;
@@ -3177,7 +3414,7 @@ function updateJump(dt) {
       hero.isJumping = false;
       hero.height = 0;
     }
-  } else {
+  } else if (!hammerSlamState.active) {
     hero.height = 0;
   }
 }
@@ -3195,6 +3432,16 @@ function updateCamera() {
   camera.position.x += (targetX - camera.position.x) * 0.08;
   camera.position.z += (targetZ - camera.position.z) * 0.08;
   camera.position.y = camHeight;
+
+  // Тряска камеры
+  if (cameraShakeAmount > 0) {
+    camera.position.x += (Math.random() - 0.5) * cameraShakeAmount * 2;
+    camera.position.y += (Math.random() - 0.5) * cameraShakeAmount * 2;
+    camera.position.z += (Math.random() - 0.5) * cameraShakeAmount * 2;
+    cameraShakeAmount *= 0.85;
+    if (cameraShakeAmount < 0.01) cameraShakeAmount = 0;
+  }
+
   camera.lookAt(hero.x, 1.5 + hero.height * 0.4, hero.z);
 
   sun.position.set(hero.x + 30, 50, hero.z + 20);
@@ -3394,12 +3641,14 @@ function loop(now) {
   if (gameActive && !paused) {
     updateJump(dt);
 
-    // Движение героя
+      // Движение героя
     let mx = 0, mz = 0;
-    if (keys.w || keys.up) mz -= 1;
-    if (keys.s || keys.down) mz += 1;
-    if (keys.a || keys.left) mx -= 1;
-    if (keys.d || keys.right) mx += 1;
+    if (!hammerSlamState.active) {
+      if (keys.w || keys.up) mz -= 1;
+      if (keys.s || keys.down) mz += 1;
+      if (keys.a || keys.left) mx -= 1;
+      if (keys.d || keys.right) mx += 1;
+    }
 
     if (mx || mz) {
       const l = Math.hypot(mx, mz);
@@ -3468,7 +3717,9 @@ function loop(now) {
       hp = Math.min(stats.maxHp, hp + stats.regen * dt);
     }
     updateHud();
+    updateWeaponHud();
 
+    updateHammerSlam(dt);
     useWeapons(dt);
     updateXpOrbs(dt);
 
@@ -3733,6 +3984,12 @@ function reset() {
   weaponTimers.hammer = 0;
   heroTransformTimer = 0;
   hammerSwingTimer = 0;
+  hammerStacks = 0;
+  hammerSlamCooldown = 0;
+  hammerSlamState.active = false;
+  hammerSlamState.timer = 0;
+  lastShiftTime = 0;
+  cameraShakeAmount = 0;
   revertHeroTransform();
   bagAngle = 0;
   rebuildWeaponMeshes();
