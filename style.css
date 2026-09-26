@@ -434,3 +434,122 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+
+/* ---------- Алерт зоны спасения ---------- */
+#zoneAlert {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 34px;
+  border-radius: 22px;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  z-index: 50;
+  display: none;
+  text-shadow: 2px 2px 0 #000;
+  font-family: inherit;
+  white-space: nowrap;
+  animation: zonePulse 0.8s ease-in-out infinite;
+}
+
+#zoneAlert.danger {
+  background: rgba(120, 10, 10, 0.88);
+  color: #ffd0d0;
+  box-shadow: 0 0 30px rgba(255, 60, 60, 0.85), 0 8px 0 #4a0808;
+  border: 3px solid #ff5555;
+}
+
+#zoneAlert.safe {
+  background: rgba(10, 80, 20, 0.88);
+  color: #d0ffd0;
+  box-shadow: 0 0 30px rgba(60, 255, 60, 0.6), 0 8px 0 #084a08;
+  border: 3px solid #44ff44;
+}
+
+@keyframes zonePulse {
+  0%, 100% { transform: translateX(-50%) scale(1); }
+  50%      { transform: translateX(-50%) scale(1.05); }
+}
+
+/* ---------- HUD босса ---------- */
+#bossHud {
+  position: fixed;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 520px;
+  max-width: 90vw;
+  background: rgba(40, 10, 50, 0.9);
+  border: 3px solid #c840c8;
+  border-radius: 20px;
+  padding: 10px 20px 12px;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 60;
+  box-shadow: 0 0 30px rgba(200, 60, 200, 0.6), 0 8px 0 #2a082a;
+  text-align: center;
+  color: #ffd0ff;
+  font-family: inherit;
+}
+
+#bossHud.active {
+  display: flex;
+  animation: bossPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bossPulse {
+  0%, 100% { box-shadow: 0 0 30px rgba(200, 60, 200, 0.6), 0 8px 0 #2a082a; }
+  50%      { box-shadow: 0 0 50px rgba(255, 80, 255, 0.9), 0 8px 0 #2a082a; }
+}
+
+.bossTitle {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  color: #ff88ff;
+  text-shadow: 2px 2px 0 #2a082a, 0 0 10px rgba(255, 100, 255, 0.6);
+}
+
+.bossBar {
+  width: 100%;
+  height: 22px;
+  background: #1a0a1a;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 3px 8px #000;
+  border: 2px solid #6a1a6a;
+}
+
+.bossBar span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #8a10c8, #ff88ff);
+  transition: width 0.15s;
+}
+
+.bossInfo {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffd0ff;
+  padding: 0 4px;
+}
+
+.bossInfo b {
+  color: #ff8888;
+  font-size: 16px;
+}
+
+#bossHud.danger .bossInfo b {
+  color: #ff2020;
+  animation: bossTimeBlink 0.5s steps(2) infinite;
+}
+
+@keyframes bossTimeBlink {
+  50% { opacity: 0.25; }
+}

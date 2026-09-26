@@ -308,16 +308,60 @@ attackArc.position.y = 0.06;
 scene.add(attackArc);
 
 // =====================================================
+//  ПРЫЖОК
+// =====================================================
+const JUMP_DURATION = 0.55;
+const JUMP_COOLDOWN = 2000;
+const JUMP_HEIGHT   = 3.0;
+const JUMP_SAFE_HEIGHT = 0.8;
+
+// =====================================================
+//  ПРИОРИТЕТНЫЕ ОБЛАСТИ
+// =====================================================
+const ZONE_RADIUS = 5;
+const BUFF_ZONE_INTERVAL = 60000;
+const BUFF_ZONE_LIFETIME = 60;
+const RESCUE_ZONE_LIFETIME = 60;
+
+const zones = [];
+let lastBuffZoneSpawn = 0;
+let nextRescueLevel = 4;
+
+// =====================================================
+//  БОСС
+// =====================================================
+const BOSS_TIMER = 90;             // 1.5 минуты на убийство
+const BOSS_FIRE_INTERVAL = 1.2;    // как часто босс стреляет
+const BOSS_PROJ_SPEED = 12;
+const BOSS_PROJ_DAMAGE = 25;
+const BOSS_CONTACT_RADIUS = 4.5;   // босс наносит контактный урон в этом радиусе
+
+const boss = {
+  active: false,
+  mesh: null,
+  aura: null,
+  x: 0, z: 0,
+  hp: 0, maxHp: 0,
+  r: 3.5,
+  speed: 2.8,
+  contactDamage: 100,
+  timeLeft: 0,
+  attackTimer: 0,
+};
+const bossProjectiles = [];
+let nextBossLevel = 10;    // 10, 20, 30...
+
+// =====================================================
 //  СОСТОЯНИЕ ИГРЫ
 // =====================================================
 const stats = {
   maxHp: 100,
   speed: 8,
-  damage: 8,          // было 30 — базовый удар теперь намного слабее
-  radius: 3.0,        // было 3.5 — чуть меньше зона удара
-  cooldown: 700,      // было 400 — бьёт реже
+  damage: 8,
+  radius: 3.0,
+  cooldown: 700,
   regen: 0,
-  magnet: 4,
+  magnet: 2.5,
 };
 
 let hp = stats.maxHp;
@@ -329,89 +373,91 @@ let gameActive = true;
 let paused = false;
 let levelUpQueue = 0;
 let kills = 0;
-let nextWeaponLevel = 5;   // на 5, 10, 15... открывается выбор оружия
+let nextWeaponLevel = 5;
 let weaponChoiceQueue = 0;
 
-const hero = { x: 0, z: 0, attackTimer: 0, attackAngle: 0, walkPhase: 0 };
+const hero = {
+  x: 0, z: 0,
+  attackTimer: 0,
+  attackAngle: 0,
+  walkPhase: 0,
+  isJumping: false,
+  jumpTimer: 0,
+  jumpCooldown: 0,
+  height: 0,
+};
+
 const enemies = [];
 const particles = [];
+const xpOrbs = [];
 
 // =====================================================
 //  ОРУЖИЕ
 // =====================================================
-// Определения 4 оружий с уровнями 1..5. Урон/эффекты растут с уровнем.
 const WEAPONS = [
   {
     id: 'pen',
     name: 'Ручка',
     ico: '🖊️',
-    desc: 'Пронзающий удар по линии перед Грифоней. Пробивает всех врагов насквозь.',
+    desc: 'Пронзающий удар по линии. С каждым уровнем — больше урона и быстрее атака.',
     color: 0x3a5fd0,
     maxLevel: 5,
-    lineLength: [12, 14, 16, 19, 22],
-    damage:     [45, 75, 110, 155, 210],
-    cooldown:   [500, 450, 400, 350, 300],
+    lineLength: [13, 15, 18, 21, 24],
+    damage:     [55, 95, 145, 205, 280],
+    cooldown:   [500, 420, 350, 280, 220],
   },
   {
     id: 'bag',
     name: 'Мешок для обуви',
     ico: '👝',
-    desc: 'Крутится вокруг Грифони, нанося урон всем, кто приблизится.',
+    desc: 'Крутится вокруг Грифони. С каждым уровнем — больше радиус, быстрее вращение и шире зона урона.',
     color: 0x8a5a2a,
     maxLevel: 5,
-    orbitRadius: [3.2, 3.6, 4.0, 4.5, 5.0],
-    dotDamage:   [45, 70, 100, 140, 190],
-    rotateSpeed: [2.5, 2.8, 3.0, 3.3, 3.6],
+    orbitRadius: [4.5, 5.5, 6.5, 7.5, 9.0],
+    dotDamage:   [55, 85, 120, 165, 220],
+    rotateSpeed: [3.2, 3.8, 4.4, 5.0, 5.8],
+    hitRadius:   [1.8, 2.1, 2.4, 2.7, 3.2],
   },
   {
     id: 'ruler',
     name: 'Линейка',
     ico: '📏',
-    desc: 'Рубящий удар широким сектором перед Грифоней. Большой радиус.',
+    desc: 'Рубящий удар широким сектором. С каждым уровнем — больше радиус, шире замах и быстрее.',
     color: 0xd9a02a,
     maxLevel: 5,
-    slashRadius: [4.5, 5.0, 5.6, 6.2, 7.0],
-    damage:      [35, 55, 80, 110, 150],
-    cooldown:    [550, 500, 450, 400, 350],
+    slashRadius: [7.0, 8.2, 9.5, 11.0, 13.0],
+    damage:      [50, 80, 120, 170, 235],
+    cooldown:    [550, 480, 420, 360, 300],
+    slashAngle:  [0.95, 1.05, 1.15, 1.25, 1.4],
   },
   {
     id: 'slingshot',
     name: 'Рогатка',
     ico: '🎯',
-    desc: 'Стреляет далеко в одного врага. Большой урон, медленная перезарядка.',
+    desc: 'Стреляет далеко в одного врага. С каждым уровнем — значительно быстрее снаряд.',
     color: 0x5a8a3a,
     maxLevel: 5,
-    projectileSpeed: 30,
-    damage:   [55, 85, 125, 175, 240],
+    projectileSpeed: [45, 62, 82, 108, 145],
+    damage:   [70, 105, 155, 220, 310],
     cooldown: [800, 720, 640, 560, 480],
-    range: 30,
+    range: 32,
   },
 ];
 
-// Текущее состояние оружия игрока: { id: {level, cooldownTimer, ...} }
 const equippedWeapons = {};
 
-// Таймеры оружия
 const weaponTimers = {
   pen: 0,
-  bag: 0,        // для мешка — таймер не нужен, работает постоянно
+  bag: 0,
   ruler: 0,
   slingshot: 0,
 };
 
-// Мешок вращается вокруг героя — угол
 let bagAngle = 0;
-
-// Снаряды рогатки
 const projectiles = [];
-
-// 3D-модели активного оружия в руках героя
 const weaponMeshes = {};
-
-// Мешок визуально
 let bagMesh = null;
 
-// Функция: получить текущий уровень оружия (0 если не взято)
 function weaponLevel(id) {
   return equippedWeapons[id] ? equippedWeapons[id].level : 0;
 }
@@ -424,15 +470,13 @@ function weaponStat(id, statKey, fallbackLevel) {
   if (!arr) return 0;
   let value = arr[Math.max(0, Math.min(arr.length - 1, lvl - 1))] || 0;
 
-  // Масштабирование урона оружия от уровня персонажа (кроме cooldown/радиуса)
   if (statKey === 'damage' || statKey === 'dotDamage') {
-    const scale = 1 + (level - 1) * 0.08;   // +8% за каждый уровень
+    const scale = 1 + (level - 1) * 0.08;
     value *= scale;
   }
   return value;
 }
 
-// Даёт/улучшает оружие
 function giveWeapon(id) {
   if (equippedWeapons[id]) {
     equippedWeapons[id].level = Math.min(
@@ -446,9 +490,7 @@ function giveWeapon(id) {
   rebuildWeaponMeshes();
 }
 
-// Создаёт/пересоздаёт 3D-модели для экипированного оружия
 function rebuildWeaponMeshes() {
-  // Удаляем старые
   for (const k in weaponMeshes) {
     heroGroup.remove(weaponMeshes[k]);
     delete weaponMeshes[k];
@@ -458,7 +500,6 @@ function rebuildWeaponMeshes() {
     bagMesh = null;
   }
 
-  // Ручка — синяя палочка в правой руке
   if (equippedWeapons.pen) {
     const g = new THREE.Group();
     const body = new THREE.Mesh(
@@ -480,7 +521,6 @@ function rebuildWeaponMeshes() {
     weaponMeshes.pen = g;
   }
 
-  // Линейка — жёлтая плоская палочка в правой руке
   if (equippedWeapons.ruler) {
     const g = new THREE.Group();
     const body = new THREE.Mesh(
@@ -489,7 +529,6 @@ function rebuildWeaponMeshes() {
     );
     body.position.set(0, 0, 0.9);
     g.add(body);
-    // Деления
     for (let i = 0; i < 6; i++) {
       const tick = new THREE.Mesh(
         new THREE.BoxGeometry(0.02, 0.07, 0.12),
@@ -503,7 +542,6 @@ function rebuildWeaponMeshes() {
     weaponMeshes.ruler = g;
   }
 
-  // Рогатка — Y-образная в левой руке
   if (equippedWeapons.slingshot) {
     const g = new THREE.Group();
     const handle = new THREE.Mesh(
@@ -535,7 +573,6 @@ function rebuildWeaponMeshes() {
     weaponMeshes.slingshot = g;
   }
 
-  // Мешок для обуви — висит на орбите, отдельный объект в сцене
   if (equippedWeapons.bag) {
     const g = new THREE.Group();
     const bag = new THREE.Mesh(
@@ -582,21 +619,19 @@ function updateWeaponHud() {
   info.textContent = list.length ? list.join(' ') : '—';
 }
 
-// Активация оружия в бою
 function useWeapons(dt) {
-  // РУЧКА — пронзающий удар
+  // РУЧКА
   if (equippedWeapons.pen) {
     weaponTimers.pen -= dt * 1000;
     if (weaponTimers.pen <= 0) {
-      const lvl = equippedWeapons.pen.level;
       const cd = weaponStat('pen', 'cooldown');
       weaponTimers.pen = cd;
 
       const dmg = weaponStat('pen', 'damage');
       const len = weaponStat('pen', 'lineLength');
-      const angle = hero.attackAngle; // направление на ближайшего врага
+      const angle = hero.attackAngle;
 
-      // Проходим по всем врагам и проверяем, попадают ли они в линию
+      let hitAny = false;
       for (let i = enemies.length - 1; i >= 0; i--) {
         const e = enemies[i];
         if (e.dying) continue;
@@ -604,30 +639,45 @@ function useWeapons(dt) {
         const dz = e.z - hero.z;
         const dist = Math.hypot(dx, dz);
         if (dist > len) continue;
-        // Проверка попадания в конус с очень узким углом (эффект линии)
         let diff = Math.abs(Math.atan2(dz, dx) - angle);
         diff = Math.min(diff, Math.PI * 2 - diff);
         if (diff > 0.35) continue;
 
         e.hp -= dmg;
-        spawnPenEffect(hero.x, hero.z, angle, len);
+        hitAny = true;
         if (e.hp <= 0) killEnemy(e, i);
       }
+      // Проверка попадания в босса
+      if (boss.active) {
+        const dx = boss.x - hero.x;
+        const dz = boss.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < len + boss.r) {
+          let diff = Math.abs(Math.atan2(dz, dx) - angle);
+          diff = Math.min(diff, Math.PI * 2 - diff);
+          if (diff < 0.5) {
+            damageBoss(dmg);
+            hitAny = true;
+          }
+        }
+      }
+      if (hitAny) spawnPenEffect(hero.x, hero.z, angle, len);
     }
   }
 
-  // ЛИНЕЙКА — рубящий удар
+  // ЛИНЕЙКА
   if (equippedWeapons.ruler) {
     weaponTimers.ruler -= dt * 1000;
     if (weaponTimers.ruler <= 0) {
-      const lvl = equippedWeapons.ruler.level;
       const cd = weaponStat('ruler', 'cooldown');
       weaponTimers.ruler = cd;
 
       const dmg = weaponStat('ruler', 'damage');
       const r = weaponStat('ruler', 'slashRadius');
+      const halfAngle = weaponStat('ruler', 'slashAngle');
       const angle = hero.attackAngle;
 
+      let hitSomething = false;
       for (let i = enemies.length - 1; i >= 0; i--) {
         const e = enemies[i];
         if (e.dying) continue;
@@ -637,47 +687,67 @@ function useWeapons(dt) {
         if (dist > r + e.r) continue;
         let diff = Math.abs(Math.atan2(dz, dx) - angle);
         diff = Math.min(diff, Math.PI * 2 - diff);
-        if (diff > 0.9) continue;
+        if (diff > halfAngle) continue;
 
         e.hp -= dmg;
-        spawnSlashEffect(hero.x, hero.z, angle, r);
+        hitSomething = true;
         if (e.hp <= 0) killEnemy(e, i);
       }
+      // Проверка попадания в босса
+      if (boss.active) {
+        const dx = boss.x - hero.x;
+        const dz = boss.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < r + boss.r) {
+          let diff = Math.abs(Math.atan2(dz, dx) - angle);
+          diff = Math.min(diff, Math.PI * 2 - diff);
+          if (diff < halfAngle + 0.15) {
+            damageBoss(dmg);
+            hitSomething = true;
+          }
+        }
+      }
+      if (hitSomething) spawnSlashEffect(hero.x, hero.z, angle, r, halfAngle);
     }
   }
 
-  // РОГАТКА — стреляет снарядом
+  // РОГАТКА
   if (equippedWeapons.slingshot) {
     weaponTimers.slingshot -= dt * 1000;
     if (weaponTimers.slingshot <= 0) {
-      const lvl = equippedWeapons.slingshot.level;
       const cd = weaponStat('slingshot', 'cooldown');
+      const range = WEAPONS.find(w => w.id === 'slingshot').range;
 
-      // Ищем ближайшего врага в радиусе
-      let nearest = null, nd = Infinity;
+      let target = null, nd = Infinity;
       for (const e of enemies) {
         if (e.dying) continue;
         const d = Math.hypot(e.x - hero.x, e.z - hero.z);
-        if (d < nd) { nd = d; nearest = e; }
+        if (d < nd) { nd = d; target = e; }
+      }
+      // Босс имеет приоритет если он ближе
+      if (boss.active) {
+        const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+        if (bd < nd) { nd = bd; target = 'boss'; }
       }
 
-      if (nearest && nd < 30) {
+      if (target && nd < range + (target === 'boss' ? boss.r : 0)) {
         weaponTimers.slingshot = cd;
-
-        const angle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
+        const tx = target === 'boss' ? boss.x : target.x;
+        const tz = target === 'boss' ? boss.z : target.z;
+        const angle = Math.atan2(tz - hero.z, tx - hero.x);
         const dmg = weaponStat('slingshot', 'damage');
-        const speed = 30;
+        const speed = weaponStat('slingshot', 'projectileSpeed');
 
         const proj = new THREE.Mesh(
-          new THREE.SphereGeometry(0.18, 8, 6),
+          new THREE.SphereGeometry(0.2, 8, 6),
           new THREE.MeshBasicMaterial({ color: 0x8a5a2a })
         );
-        proj.position.set(hero.x, 1.5, hero.z);
+        proj.position.set(hero.x, 1.5 + hero.height, hero.z);
         proj.userData = {
           vx: Math.cos(angle) * speed,
           vz: Math.sin(angle) * speed,
           damage: dmg,
-          life: 2.0,
+          life: 1.5,
         };
         scene.add(proj);
         projectiles.push(proj);
@@ -685,29 +755,53 @@ function useWeapons(dt) {
     }
   }
 
-  // МЕШОК — вращается вокруг, наносит DoT
+  // МЕШОК
   if (equippedWeapons.bag && bagMesh) {
-    const lvl = equippedWeapons.bag.level;
     const r = weaponStat('bag', 'orbitRadius');
     const rotSpeed = weaponStat('bag', 'rotateSpeed');
     const dps = weaponStat('bag', 'dotDamage');
+    const hitR = weaponStat('bag', 'hitRadius');
 
     bagAngle += dt * rotSpeed;
     const bx = hero.x + Math.cos(bagAngle) * r;
     const bz = hero.z + Math.sin(bagAngle) * r;
-    bagMesh.position.set(bx, 1.4, bz);
+    bagMesh.position.set(bx, 1.4 + hero.height, bz);
     bagMesh.rotation.y += dt * 4;
     bagMesh.rotation.x = Math.sin(bagAngle * 2) * 0.3;
 
-    for (const e of enemies) {
+    const visualScale = 0.85 + (hitR - 1.8) * 0.35;
+    bagMesh.scale.setScalar(visualScale);
+
+    const angularHalfWidth = 0.55 + Math.max(0, hitR - 1.0) * 0.13;
+    const maxReach = r + hitR + 1.2;
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
       if (e.dying) continue;
-      const d = Math.hypot(e.x - bx, e.z - bz);
-      if (d < 1.0 + e.r) {
+
+      const dx = e.x - hero.x;
+      const dz = e.z - hero.z;
+      const eDist = Math.hypot(dx, dz);
+      const eAngle = Math.atan2(dz, dx);
+
+      let angleDiff = Math.abs(eAngle - bagAngle);
+      angleDiff = Math.min(angleDiff, Math.PI * 2 - angleDiff);
+
+      if (angleDiff < angularHalfWidth && eDist < maxReach + e.r) {
         e.hp -= dps * dt;
-        if (e.hp <= 0) {
-          const idx = enemies.indexOf(e);
-          if (idx >= 0) killEnemy(e, idx);
-        }
+        if (e.hp <= 0) killEnemy(e, i);
+      }
+    }
+    // Мешок бьёт босса
+    if (boss.active) {
+      const dx = boss.x - hero.x;
+      const dz = boss.z - hero.z;
+      const eDist = Math.hypot(dx, dz);
+      const eAngle = Math.atan2(dz, dx);
+      let angleDiff = Math.abs(eAngle - bagAngle);
+      angleDiff = Math.min(angleDiff, Math.PI * 2 - angleDiff);
+      if (angleDiff < angularHalfWidth && eDist < maxReach + boss.r) {
+        damageBoss(dps * dt);
       }
     }
   }
@@ -721,6 +815,7 @@ function useWeapons(dt) {
     p.position.z += ud.vz * dt;
 
     let hit = false;
+    // Проверка врагов
     for (let j = enemies.length - 1; j >= 0; j--) {
       const e = enemies[j];
       if (e.dying) continue;
@@ -732,6 +827,14 @@ function useWeapons(dt) {
         break;
       }
     }
+    // Проверка босса
+    if (!hit && boss.active) {
+      const d = Math.hypot(boss.x - p.position.x, boss.z - p.position.z);
+      if (d < boss.r + 0.5) {
+        damageBoss(ud.damage);
+        hit = true;
+      }
+    }
 
     if (hit || ud.life <= 0 ||
         p.position.x < -MAP / 2 || p.position.x > MAP / 2 ||
@@ -741,7 +844,6 @@ function useWeapons(dt) {
     }
   }
 
-  // Анимация мечей/палок в руках героя при взмахе
   if (hero.attackTimer > 0) {
     const t = Math.max(0, hero.attackTimer / 0.18);
     if (weaponMeshes.pen) weaponMeshes.pen.rotation.y = -1.4 * t;
@@ -752,19 +854,16 @@ function useWeapons(dt) {
   }
 }
 
-// Убирает врага, начисляет очки/опыт
 function killEnemy(e, idx) {
   if (e.dying) return;
   e.dying = true;
   e.dyingTimer = 0.25;
   score += 10;
   kills++;
-  addXP(e.xpValue);
+  spawnXPOrb(e.x, e.z, e.xpValue);
   burst(e.x, e.z, e.type.color);
-  // Оставим в массиве — он исчезнет в обновлении врагов
 }
 
-// Эффект пронзающего удара — тонкая длинная полоса
 function spawnPenEffect(x, z, angle, len) {
   const geo = new THREE.PlaneGeometry(len, 0.4);
   const mat = new THREE.MeshBasicMaterial({
@@ -777,8 +876,6 @@ function spawnPenEffect(x, z, angle, len) {
   m.rotation.z = -angle;
   scene.add(m);
 
-  // Затухание
-  let life = 0.25;
   const start = performance.now();
   function fade() {
     const t = (performance.now() - start) / 250;
@@ -789,9 +886,8 @@ function spawnPenEffect(x, z, angle, len) {
   fade();
 }
 
-// Эффект рубящего удара — широкий сектор
-function spawnSlashEffect(x, z, angle, r) {
-  const geo = new THREE.CircleGeometry(r, 24, angle - 0.9, 1.8);
+function spawnSlashEffect(x, z, angle, r, halfAngle) {
+  const geo = new THREE.CircleGeometry(r, 32, angle - halfAngle, halfAngle * 2);
   const mat = new THREE.MeshBasicMaterial({
     color: 0xffd966, transparent: true, opacity: 0.65,
     side: THREE.DoubleSide, depthWrite: false,
@@ -813,13 +909,640 @@ function spawnSlashEffect(x, z, angle, r) {
 }
 
 // =====================================================
+//  БОСС — СОЗДАНИЕ МЕША
+// =====================================================
+function makeBossCoverTexture() {
+  const c = document.createElement('canvas');
+  c.width = 384;
+  c.height = 480;
+  const g = c.getContext('2d');
+
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0, '#8a1ac8');
+  grad.addColorStop(1, '#2a0a4a');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+
+  g.strokeStyle = '#c840ff';
+  g.lineWidth = 16;
+  g.strokeRect(10, 10, c.width - 20, c.height - 20);
+
+  g.fillStyle = '#c840ff';
+  g.fillRect(28, 28, c.width - 56, 80);
+
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 42px Arial';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('УЧЕБНИК', c.width / 2, 68);
+
+  g.fillStyle = '#ff88ff';
+  g.font = 'bold 96px Arial';
+  g.fillText('ХИМИЯ', c.width / 2, 200);
+
+  g.fillStyle = '#ffd0ff';
+  g.font = 'bold 26px Arial';
+  g.fillText('10-11 КЛАСС', c.width / 2, 255);
+
+  // Фляга
+  g.beginPath();
+  g.arc(c.width / 2, 355, 58, 0, Math.PI * 2);
+  g.fillStyle = '#88ff44';
+  g.fill();
+  g.strokeStyle = '#2a0a4a';
+  g.lineWidth = 6;
+  g.stroke();
+
+  // Пузырьки
+  g.fillStyle = '#ffffff';
+  g.beginPath(); g.arc(c.width / 2 - 18, 340, 7, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(c.width / 2 + 14, 365, 6, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(c.width / 2 - 4, 380, 5, 0, Math.PI * 2); g.fill();
+
+  g.fillStyle = '#c840ff';
+  g.fillRect(28, c.height - 80, c.width - 56, 52);
+
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 26px Arial';
+  g.fillText('ШКОЛА №1', c.width / 2, c.height - 54);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function makeBossMesh() {
+  const group = new THREE.Group();
+  const W = 4.5, H = 5.5, D = 1.2;
+
+  const pagesMat = new THREE.MeshLambertMaterial({ color: 0xe0e8c0 });
+  const pages = new THREE.Mesh(new THREE.BoxGeometry(W * 0.96, H * 0.96, D * 0.9), pagesMat);
+  pages.castShadow = true;
+  group.add(pages);
+
+  const coverMat = new THREE.MeshLambertMaterial({ map: makeBossCoverTexture() });
+  const cover = new THREE.Mesh(new THREE.PlaneGeometry(W, H), coverMat);
+  cover.position.z = D / 2 + 0.001;
+  cover.castShadow = true;
+  group.add(cover);
+
+  const backMat = new THREE.MeshLambertMaterial({ color: 0x6b1a8a });
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), backMat);
+  back.position.z = -D / 2 - 0.001;
+  back.rotation.y = Math.PI;
+  group.add(back);
+
+  const spineMat = new THREE.MeshLambertMaterial({ color: 0x4a0a6a });
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.35, H, D * 0.95), spineMat);
+  spine.position.x = -W / 2;
+  spine.castShadow = true;
+  group.add(spine);
+
+  // Красные глаза
+  const eyeM = new THREE.MeshBasicMaterial({ color: 0xff3030 });
+  const pupilM = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+  const el = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 10), eyeM);
+  el.position.set(-1.05, 1.0, D / 2 + 0.05);
+  group.add(el);
+  const er = el.clone();
+  er.position.x = 1.05;
+  group.add(er);
+
+  const pl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), pupilM);
+  pl.position.set(-1.05, 1.0, D / 2 + 0.4);
+  group.add(pl);
+  const pr = pl.clone();
+  pr.position.x = 1.05;
+  group.add(pr);
+
+  // Злые брови
+  const browMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const browL = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.16, 0.1), browMat);
+  browL.position.set(-1.05, 1.65, D / 2 + 0.05);
+  browL.rotation.z = 0.4;
+  group.add(browL);
+  const browR = browL.clone();
+  browR.position.x = 1.05;
+  browR.rotation.z = -0.4;
+  group.add(browR);
+
+  // Злой рот
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.65, 0.14, 6, 12, Math.PI),
+    browMat
+  );
+  mouth.position.set(0, -1.2, D / 2 + 0.05);
+  mouth.rotation.z = Math.PI;
+  group.add(mouth);
+
+  // Зубы
+  for (let i = 0; i < 5; i++) {
+    const tooth = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.22, 0.09),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    tooth.position.set(-0.44 + i * 0.22, -1.0, D / 2 + 0.1);
+    group.add(tooth);
+  }
+
+  return group;
+}
+
+function makeBossAura() {
+  const group = new THREE.Group();
+
+  const ringGeo = new THREE.RingGeometry(4.2, 5.0, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xff40ff, transparent: true, opacity: 0.55,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.1;
+  group.add(ring);
+
+  // Лучи
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const ray = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 0.3),
+      new THREE.MeshBasicMaterial({
+        color: 0xff80ff, transparent: true, opacity: 0.5,
+        side: THREE.DoubleSide, depthWrite: false,
+      })
+    );
+    ray.rotation.x = -Math.PI / 2;
+    ray.rotation.z = a;
+    ray.position.set(Math.cos(a) * 3.5, 0.11, Math.sin(a) * 3.5);
+    group.add(ray);
+  }
+
+  return group;
+}
+
+// =====================================================
+//  БОСС — ЛОГИКА
+// =====================================================
+function spawnBoss() {
+  if (boss.active) return;
+
+  const maxHp = 5000 + level * 250;
+
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 32;
+  const x = hero.x + Math.cos(angle) * dist;
+  const z = hero.z + Math.sin(angle) * dist;
+
+  const mesh = makeBossMesh();
+  mesh.position.set(x, 2.6, z);
+  scene.add(mesh);
+
+  const aura = makeBossAura();
+  aura.position.set(x, 0, z);
+  scene.add(aura);
+
+  boss.active = true;
+  boss.mesh = mesh;
+  boss.aura = aura;
+  boss.x = x;
+  boss.z = z;
+  boss.hp = maxHp;
+  boss.maxHp = maxHp;
+  boss.r = 3.5;
+  boss.speed = 2.8;
+  boss.contactDamage = 80 + level * 3;
+  boss.timeLeft = BOSS_TIMER;
+  boss.attackTimer = 1.5;
+
+  document.getElementById('bossHud').classList.add('active');
+  updateBossHud();
+}
+
+function damageBoss(amount) {
+  if (!boss.active) return;
+  boss.hp -= amount;
+  updateBossHud();
+  if (boss.hp <= 0) killBoss();
+}
+
+function killBoss() {
+  if (!boss.active) return;
+
+  score += 1000;
+  kills += 1;
+
+  // Взрыв
+  for (let i = 0; i < 8; i++) {
+    burst(boss.x + (Math.random() - 0.5) * 5, boss.z + (Math.random() - 0.5) * 5, 0xff40ff);
+  }
+
+  // Много XP-орбов по кругу
+  for (let i = 0; i < 30; i++) {
+    const a = (i / 30) * Math.PI * 2;
+    const d = 2 + Math.random() * 6;
+    spawnXPOrb(boss.x + Math.cos(a) * d, boss.z + Math.sin(a) * d, 20);
+  }
+
+  scene.remove(boss.mesh);
+  scene.remove(boss.aura);
+  boss.active = false;
+  boss.mesh = null;
+  boss.aura = null;
+
+  bossProjectiles.forEach(p => scene.remove(p));
+  bossProjectiles.length = 0;
+
+  document.getElementById('bossHud').classList.remove('active');
+  updateHud();
+}
+
+function updateBossHud() {
+  const bar = document.getElementById('bossHpBar');
+  const text = document.getElementById('bossHpText');
+  const timeEl = document.getElementById('bossTime');
+  const hud = document.getElementById('bossHud');
+
+  bar.style.width = Math.max(0, boss.hp / boss.maxHp * 100) + '%';
+  text.textContent = `${Math.max(0, Math.ceil(boss.hp))} / ${boss.maxHp}`;
+
+  const t = Math.max(0, boss.timeLeft);
+  const min = Math.floor(t / 60);
+  const sec = Math.floor(t % 60);
+  timeEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+
+  if (t <= 15) hud.classList.add('danger');
+  else hud.classList.remove('danger');
+}
+
+function updateBoss(dt) {
+  if (!boss.active) return;
+
+  boss.timeLeft -= dt;
+  updateBossHud();
+
+  // Время вышло — герой погибает
+  if (boss.timeLeft <= 0) {
+    hp = 0;
+    gameActive = false;
+    updateHud();
+    document.getElementById('bossHud').classList.remove('active');
+    showGameOver('Химия победила — вы не успели её убить за 1:30');
+    return;
+  }
+
+  // Движение к герою
+  const dx = hero.x - boss.x;
+  const dz = hero.z - boss.z;
+  const d = Math.hypot(dx, dz) || 1;
+
+  if (d > 5.5) {
+    boss.x += (dx / d) * boss.speed * dt;
+    boss.z += (dz / d) * boss.speed * dt;
+  }
+
+  // Позиционирование меша
+  const bob = Math.sin(performance.now() * 0.003) * 0.35;
+  boss.mesh.position.set(boss.x, 2.6 + bob, boss.z);
+  boss.mesh.lookAt(hero.x, 2.6 + bob, hero.z);
+
+  boss.aura.position.set(boss.x, 0, boss.z);
+  boss.aura.rotation.y += dt * 1.4;
+
+  // Стрельба
+  boss.attackTimer -= dt;
+  if (boss.attackTimer <= 0) {
+    boss.attackTimer = BOSS_FIRE_INTERVAL;
+    const baseAngle = Math.atan2(dz, dx);
+    for (let i = -1; i <= 1; i++) {
+      const a = baseAngle + i * 0.32;
+      const proj = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0x88ff44 })
+      );
+      proj.position.set(boss.x, 2.0 + bob, boss.z);
+      proj.userData = {
+        vx: Math.cos(a) * BOSS_PROJ_SPEED,
+        vz: Math.sin(a) * BOSS_PROJ_SPEED,
+        life: 3.5,
+      };
+      scene.add(proj);
+      bossProjectiles.push(proj);
+    }
+  }
+
+  // Контактный урон
+  if (d < BOSS_CONTACT_RADIUS && hero.height < JUMP_SAFE_HEIGHT) {
+    hp -= boss.contactDamage * dt;
+    if (hp <= 0 && gameActive) {
+      hp = 0;
+      gameActive = false;
+      document.getElementById('bossHud').classList.remove('active');
+      showGameOver();
+    }
+    updateHud();
+  }
+}
+
+function updateBossProjectiles(dt) {
+  for (let i = bossProjectiles.length - 1; i >= 0; i--) {
+    const p = bossProjectiles[i];
+    p.userData.life -= dt;
+    p.position.x += p.userData.vx * dt;
+    p.position.z += p.userData.vz * dt;
+    p.rotation.x += dt * 4;
+    p.rotation.y += dt * 6;
+
+    const dx = hero.x - p.position.x;
+    const dz = hero.z - p.position.z;
+    const d = Math.hypot(dx, dz);
+
+    if (d < 1.1 && hero.height < JUMP_SAFE_HEIGHT) {
+      hp -= BOSS_PROJ_DAMAGE;
+      burst(p.position.x, p.position.z, 0x88ff44);
+      if (hp <= 0 && gameActive) {
+        hp = 0;
+        gameActive = false;
+        document.getElementById('bossHud').classList.remove('active');
+        showGameOver();
+      }
+      updateHud();
+      scene.remove(p);
+      bossProjectiles.splice(i, 1);
+      continue;
+    }
+
+    if (p.userData.life <= 0 ||
+        Math.abs(p.position.x) > MAP / 2 ||
+        Math.abs(p.position.z) > MAP / 2) {
+      scene.remove(p);
+      bossProjectiles.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
+//  XP-ОРБЫ
+// =====================================================
+const xpOrbGeo = new THREE.SphereGeometry(1, 10, 8);
+const xpOrbHaloGeo = new THREE.SphereGeometry(1, 8, 6);
+
+function spawnXPOrb(x, z, value) {
+  const size = 0.18 + Math.min(0.22, value * 0.012);
+
+  const mesh = new THREE.Mesh(
+    xpOrbGeo,
+    new THREE.MeshBasicMaterial({ color: 0x4fc3f7 })
+  );
+  mesh.scale.setScalar(size);
+  mesh.position.set(x, 1.0, z);
+
+  const halo = new THREE.Mesh(
+    xpOrbHaloGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0x88ddff,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    })
+  );
+  halo.scale.setScalar(size * 2.4);
+  mesh.add(halo);
+
+  const core = new THREE.Mesh(
+    xpOrbHaloGeo,
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  core.scale.setScalar(0.35);
+  mesh.add(core);
+
+  scene.add(mesh);
+
+  xpOrbs.push({
+    mesh,
+    halo,
+    x, z,
+    value,
+    size,
+    bobPhase: Math.random() * Math.PI * 2,
+  });
+}
+
+function updateXpOrbs(dt) {
+  for (let i = xpOrbs.length - 1; i >= 0; i--) {
+    const orb = xpOrbs[i];
+    const dx = hero.x - orb.x;
+    const dz = hero.z - orb.z;
+    const d = Math.hypot(dx, dz) || 0.0001;
+
+    if (d < stats.magnet) {
+      const pull = 14 + (stats.magnet - d) * 3;
+      orb.x += (dx / d) * pull * dt;
+      orb.z += (dz / d) * pull * dt;
+    }
+
+    if (d < 0.9) {
+      addXP(orb.value);
+      burst(orb.x, orb.z, 0x4fc3f7);
+      scene.remove(orb.mesh);
+      xpOrbs.splice(i, 1);
+      continue;
+    }
+
+    orb.bobPhase += dt * 3.5;
+    const bob = Math.sin(orb.bobPhase) * 0.18;
+    orb.mesh.position.set(orb.x, 1.0 + bob, orb.z);
+    orb.mesh.rotation.y += dt * 2;
+    const haloPulse = 1 + Math.sin(orb.bobPhase * 1.6) * 0.18;
+    orb.halo.scale.setScalar(orb.size * 2.4 * haloPulse);
+  }
+}
+
+// =====================================================
+//  ЗОНЫ
+// =====================================================
+function findFreeSpot(radius) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const x = (Math.random() - 0.5) * (MAP - 40);
+    const z = (Math.random() - 0.5) * (MAP - 40);
+    if (!isInsideHouse(x, z, radius + 2)) return { x, z };
+  }
+  return { x: 0, z: -60 };
+}
+
+function makeZoneMesh(color, radius) {
+  const group = new THREE.Group();
+
+  const ringGeo = new THREE.RingGeometry(radius - 0.4, radius, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.9,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  group.add(ring);
+
+  const discGeo = new THREE.CircleGeometry(radius, 48);
+  const discMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.12,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const disc = new THREE.Mesh(discGeo, discMat);
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = 0.05;
+  group.add(disc);
+
+  const beamGeo = new THREE.CylinderGeometry(radius * 0.95, radius * 0.95, 12, 24, 1, true);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.13,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.position.y = 6;
+  group.add(beam);
+
+  scene.add(group);
+
+  return { group, ring, ringMat, discMat, beamMat };
+}
+
+function spawnBuffZone() {
+  const pos = findFreeSpot(ZONE_RADIUS);
+  const { group, ring, ringMat, discMat, beamMat } = makeZoneMesh(0x4fc3f7, ZONE_RADIUS);
+  group.position.set(pos.x, 0, pos.z);
+
+  zones.push({
+    type: 'buff',
+    x: pos.x, z: pos.z,
+    radius: ZONE_RADIUS,
+    timeLeft: BUFF_ZONE_LIFETIME,
+    group, ring, ringMat, discMat, beamMat,
+    buffAccum: 0,
+  });
+
+  burst(pos.x, pos.z, 0x88ddff);
+}
+
+function spawnRescueZone() {
+  if (zones.some(z => z.type === 'rescue')) return;
+  // Не спавним во время боя с боссом
+  if (boss.active) return;
+
+  const pos = findFreeSpot(ZONE_RADIUS);
+  const { group, ring, ringMat, discMat, beamMat } = makeZoneMesh(0xff3333, ZONE_RADIUS);
+  group.position.set(pos.x, 0, pos.z);
+
+  zones.push({
+    type: 'rescue',
+    x: pos.x, z: pos.z,
+    radius: ZONE_RADIUS,
+    timeLeft: RESCUE_ZONE_LIFETIME,
+    group, ring, ringMat, discMat, beamMat,
+    insideSafe: false,
+  });
+
+  burst(pos.x, pos.z, 0xff5555);
+}
+
+function updateZones(dt) {
+  const now = performance.now();
+
+  // Не спавним бафф-зону во время боя с боссом
+  if (!boss.active && now - lastBuffZoneSpawn > BUFF_ZONE_INTERVAL &&
+      !zones.some(z => z.type === 'buff')) {
+    spawnBuffZone();
+    lastBuffZoneSpawn = now;
+  }
+
+  for (let i = zones.length - 1; i >= 0; i--) {
+    const z = zones[i];
+    z.timeLeft -= dt;
+
+    const pulse = 1 + Math.sin(now * 0.005) * 0.04;
+    z.ring.scale.set(pulse, pulse, 1);
+
+    const dx = hero.x - z.x;
+    const dz = hero.z - z.z;
+    const inside = Math.hypot(dx, dz) < z.radius;
+
+    if (z.type === 'buff') {
+      if (inside) {
+        z.ringMat.color.setHex(0x88ff88);
+        z.discMat.color.setHex(0x88ff88);
+        z.beamMat.color.setHex(0x88ff88);
+        z.buffAccum += dt;
+        while (z.buffAccum >= 0.5) {
+          z.buffAccum -= 0.5;
+          stats.maxHp += 1;
+          hp = Math.min(stats.maxHp, hp + 1);
+          stats.damage += 0.3;
+          stats.speed += 0.01;
+          stats.radius += 0.0075;
+          stats.cooldown = Math.max(250, stats.cooldown - 0.5);
+          stats.magnet += 0.04;
+          updateHud();
+        }
+      } else {
+        z.ringMat.color.setHex(0x4fc3f7);
+        z.discMat.color.setHex(0x4fc3f7);
+        z.beamMat.color.setHex(0x4fc3f7);
+        z.buffAccum = 0;
+      }
+    } else if (z.type === 'rescue') {
+      z.insideSafe = inside;
+      if (inside) {
+        z.ringMat.color.setHex(0x44ff44);
+        z.discMat.color.setHex(0x44ff44);
+        z.beamMat.color.setHex(0x44ff44);
+      } else {
+        z.ringMat.color.setHex(0xff3333);
+        z.discMat.color.setHex(0xff3333);
+        z.beamMat.color.setHex(0xff3333);
+      }
+    }
+
+    if (z.timeLeft <= 0) {
+      if (z.type === 'rescue' && !z.insideSafe && gameActive) {
+        gameActive = false;
+        hp = 0;
+        updateHud();
+        showGameOver('Вы не успели в зону спасения');
+      }
+      scene.remove(z.group);
+      zones.splice(i, 1);
+    }
+  }
+}
+
+function updateZoneHUD() {
+  const el = document.getElementById('zoneAlert');
+  const rescue = zones.find(z => z.type === 'rescue');
+  if (rescue && gameActive) {
+    el.textContent = rescue.insideSafe
+      ? `✓ БЕЗОПАСНО: ${Math.ceil(rescue.timeLeft)}с`
+      : `⚠ СПАСЕНИЕ: ${Math.ceil(rescue.timeLeft)}с — беги в зону!`;
+    el.style.display = 'block';
+    el.className = rescue.insideSafe ? 'safe' : 'danger';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// =====================================================
 //  ВВОД
 // =====================================================
-const keys = { w: 0, a: 0, s: 0, d: 0, up: 0, left: 0, down: 0, right: 0, space: 0 };
+const keys = {
+  w: 0, a: 0, s: 0, d: 0,
+  up: 0, left: 0, down: 0, right: 0,
+  space: 0, shift: 0,
+};
 
 addEventListener('keydown', e => {
   const c = e.code;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(c)) {
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+       'ShiftLeft', 'ShiftRight'].includes(c)) {
     e.preventDefault();
   }
   if (c === 'KeyW') keys.w = 1;
@@ -830,6 +1553,7 @@ addEventListener('keydown', e => {
   if (c === 'ArrowLeft') keys.left = 1;
   if (c === 'ArrowDown') keys.down = 1;
   if (c === 'ArrowRight') keys.right = 1;
+  if (c === 'ShiftLeft' || c === 'ShiftRight') keys.shift = 1;
   if (c === 'Space') {
     keys.space = 1;
     if (gameActive && !paused) doAttack();
@@ -846,6 +1570,7 @@ addEventListener('keyup', e => {
   if (c === 'ArrowLeft') keys.left = 0;
   if (c === 'ArrowDown') keys.down = 0;
   if (c === 'ArrowRight') keys.right = 0;
+  if (c === 'ShiftLeft' || c === 'ShiftRight') keys.shift = 0;
   if (c === 'Space') keys.space = 0;
 });
 
@@ -862,6 +1587,7 @@ const lvlEl = document.getElementById('lvl');
 const scoreEl = document.getElementById('score');
 
 const gameoverEl = document.getElementById('gameover');
+const gameoverSubtitleEl = document.getElementById('gameoverSubtitle');
 const finalLevelEl = document.getElementById('finalLevel');
 const finalScoreEl = document.getElementById('finalScore');
 const finalKillsEl = document.getElementById('finalKills');
@@ -873,11 +1599,12 @@ function updateHud() {
   scoreEl.textContent = score;
 }
 
-function showGameOver() {
+function showGameOver(message) {
   gameoverEl.classList.add('active');
   finalLevelEl.textContent = level;
   finalScoreEl.textContent = score;
   finalKillsEl.textContent = kills;
+  gameoverSubtitleEl.textContent = message || 'Грифоню завалили учебниками...';
 }
 
 // =====================================================
@@ -1056,8 +1783,7 @@ function spawnEnemy() {
   mesh.position.set(x, 0.9, z);
   scene.add(mesh);
 
-    // Враги значительно крепче — оружие обязательно
-  const maxHp = 12 + tier * 12;    // было 2 + tier*1.6 → стало 12 при tier=1 и до 72 при tier=5
+  const maxHp = 12 + tier * 12;
   enemies.push({
     mesh, x, z,
     type,
@@ -1105,7 +1831,7 @@ function resolveHouseCollision(px, pz, r) {
 }
 
 // =====================================================
-//  УДАР РЮКЗАКОМ (базовая атака, всегда есть)
+//  УДАР РЮКЗАКОМ
 // =====================================================
 let lastAttack = 0;
 
@@ -1121,6 +1847,15 @@ function doAttack() {
     const d = Math.hypot(e.x - hero.x, e.z - hero.z);
     if (d < nd) { nd = d; nearest = e; }
   }
+  // Босс имеет приоритет, если он ближе
+  if (boss.active) {
+    const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+    if (bd < nd) {
+      nd = bd;
+      nearest = { x: boss.x, z: boss.z, isBoss: true };
+    }
+  }
+
   if (nearest) {
     hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
   }
@@ -1145,6 +1880,22 @@ function doAttack() {
 
     if (e.hp <= 0) killEnemy(e, i);
   }
+
+  // Проверка попадания по боссу
+  if (boss.active) {
+    const dx = boss.x - hero.x;
+    const dz = boss.z - hero.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < stats.radius + boss.r) {
+      let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
+      diff = Math.min(diff, Math.PI * 2 - diff);
+      if (diff > 1.15) {
+        // не попал
+      } else {
+        damageBoss(stats.damage);
+      }
+    }
+  }
 }
 
 // =====================================================
@@ -1159,15 +1910,24 @@ function addXP(v) {
     hp = Math.min(stats.maxHp, hp + stats.maxHp * 0.2);
     levelUpQueue++;
 
-    // Проверка: не пора ли выбрать оружие?
     if (level >= nextWeaponLevel) {
       nextWeaponLevel += 5;
       weaponChoiceQueue++;
     }
+
+    if (level >= nextRescueLevel) {
+      nextRescueLevel += 4;
+      spawnRescueZone();
+    }
+
+    // Спавн босса каждые 10 уровней
+    if (level >= nextBossLevel && !boss.active) {
+      nextBossLevel += 10;
+      spawnBoss();
+    }
   }
   updateHud();
 
-  // Сначала оружие, потом обычная прокачка (более важное — вперёд)
   if (weaponChoiceQueue > 0 && !paused) {
     openWeaponChoice();
   } else if (levelUpQueue > 0 && !paused) {
@@ -1176,7 +1936,7 @@ function addXP(v) {
 }
 
 // =====================================================
-//  ПРОКАЧКА (обычная)
+//  ПРОКАЧКА
 // =====================================================
 const UPGRADES = [
   { ico: '💪', name: 'Толще', desc: '+30 макс. HP и +30 HP',
@@ -1191,13 +1951,17 @@ const UPGRADES = [
     apply: () => { stats.cooldown = Math.max(250, stats.cooldown - 100); } },
   { ico: '🍔', name: 'Перекус', desc: '+1.5 HP/сек регенерации',
     apply: () => { stats.regen += 1.5; } },
-  { ico: '🧲', name: 'Магнит', desc: '+2 к радиусу сбора опыта',
-    apply: () => { stats.magnet += 2; } },
+  { ico: '🧲', name: 'Магнит', desc: '+2.5 к радиусу сбора опыта',
+    apply: () => { stats.magnet += 2.5; } },
   { ico: '🛡️', name: 'Плотный пиджак', desc: '+20 макс. HP',
     apply: () => { stats.maxHp += 20; } },
   { ico: '📚', name: 'Закалённый', desc: '+10 к урону рюкзака, -80 мс перезарядки',
     apply: () => { stats.damage += 10; stats.cooldown = Math.max(250, stats.cooldown - 80); } },
+  { ico: '🦘', name: 'Прыгучий', desc: '-400 мс откат прыжка',
+    apply: () => { jumpCooldownBonus += 400; } },
 ];
+
+let jumpCooldownBonus = 0;
 
 const overlay = document.getElementById('levelup');
 const cardsEl = document.getElementById('cards');
@@ -1224,7 +1988,6 @@ function openLevelUp() {
       overlay.classList.remove('active');
       paused = false;
       levelUpQueue--;
-      // Если после этого остались ещё очереди — показываем их
       if (weaponChoiceQueue > 0) {
         setTimeout(openWeaponChoice, 60);
       } else if (levelUpQueue > 0) {
@@ -1280,7 +2043,6 @@ function openWeaponChoice() {
         weaponOverlay.classList.remove('active');
         paused = false;
         weaponChoiceQueue--;
-        // После оружия — обычная прокачка, если есть
         if (weaponChoiceQueue > 0) {
           setTimeout(openWeaponChoice, 60);
         } else if (levelUpQueue > 0) {
@@ -1362,6 +2124,36 @@ function updateAttackIndicator() {
 }
 
 // =====================================================
+//  ПРЫЖОК
+// =====================================================
+function updateJump(dt) {
+  if (hero.jumpCooldown > 0) {
+    hero.jumpCooldown -= dt * 1000;
+    if (hero.jumpCooldown < 0) hero.jumpCooldown = 0;
+  }
+
+  if (keys.shift && !hero.isJumping && hero.jumpCooldown <= 0 && gameActive && !paused) {
+    hero.isJumping = true;
+    hero.jumpTimer = JUMP_DURATION;
+    hero.jumpCooldown = Math.max(600, JUMP_COOLDOWN - jumpCooldownBonus);
+    keys.shift = 0;
+  }
+
+  if (hero.isJumping) {
+    hero.jumpTimer -= dt;
+    const progress = 1 - (hero.jumpTimer / JUMP_DURATION);
+    hero.height = Math.sin(progress * Math.PI) * JUMP_HEIGHT;
+
+    if (hero.jumpTimer <= 0) {
+      hero.isJumping = false;
+      hero.height = 0;
+    }
+  } else {
+    hero.height = 0;
+  }
+}
+
+// =====================================================
 //  КАМЕРА
 // =====================================================
 function updateCamera() {
@@ -1374,7 +2166,7 @@ function updateCamera() {
   camera.position.x += (targetX - camera.position.x) * 0.08;
   camera.position.z += (targetZ - camera.position.z) * 0.08;
   camera.position.y = camHeight;
-  camera.lookAt(hero.x, 1.5, hero.z);
+  camera.lookAt(hero.x, 1.5 + hero.height * 0.4, hero.z);
 
   sun.position.set(hero.x + 30, 50, hero.z + 20);
   sun.target.position.set(hero.x, 0, hero.z);
@@ -1420,12 +2212,69 @@ function drawMinimap() {
     mmCtx.strokeStyle = '#7a3a2a';
     mmCtx.lineWidth = 2;
     mmCtx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+  }
+
+  for (const orb of xpOrbs) {
+    const p = worldToMinimap(orb.x, orb.z);
     mmCtx.beginPath();
-    mmCtx.moveTo((a.x + b.x) / 2, a.y - 3);
-    mmCtx.lineTo(a.x, a.y);
-    mmCtx.lineTo(b.x, a.y);
-    mmCtx.closePath();
-    mmCtx.fillStyle = '#a03a2a';
+    mmCtx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+    mmCtx.fillStyle = '#4fc3f7';
+    mmCtx.fill();
+  }
+
+  for (const z of zones) {
+    const p = worldToMinimap(z.x, z.z);
+    const mmR = Math.max(4, z.radius / MAP * MM_SIZE);
+    mmCtx.beginPath();
+    mmCtx.arc(p.x, p.y, mmR, 0, Math.PI * 2);
+    if (z.type === 'buff') {
+      mmCtx.fillStyle = 'rgba(79, 195, 247, 0.35)';
+      mmCtx.strokeStyle = '#4fc3f7';
+    } else {
+      if (z.insideSafe) {
+        mmCtx.fillStyle = 'rgba(68, 255, 68, 0.35)';
+        mmCtx.strokeStyle = '#44ff44';
+      } else {
+        mmCtx.fillStyle = 'rgba(255, 51, 51, 0.35)';
+        mmCtx.strokeStyle = '#ff3333';
+      }
+    }
+    mmCtx.fill();
+    mmCtx.lineWidth = 2.5;
+    mmCtx.stroke();
+
+    mmCtx.fillStyle = '#ffffff';
+    mmCtx.font = 'bold 11px Arial';
+    mmCtx.textAlign = 'center';
+    mmCtx.textBaseline = 'middle';
+    mmCtx.fillText(Math.ceil(z.timeLeft), p.x, p.y);
+  }
+
+  // БОСС на миникарте — большой фиолетовый круг
+  if (boss.active) {
+    const p = worldToMinimap(boss.x, boss.z);
+    mmCtx.beginPath();
+    mmCtx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    mmCtx.fillStyle = '#ff40ff';
+    mmCtx.fill();
+    mmCtx.strokeStyle = '#ffffff';
+    mmCtx.lineWidth = 2;
+    mmCtx.stroke();
+    // Пульсирующее кольцо вокруг босса
+    const pulse = 8 + Math.sin(performance.now() * 0.008) * 2;
+    mmCtx.beginPath();
+    mmCtx.arc(p.x, p.y, pulse, 0, Math.PI * 2);
+    mmCtx.strokeStyle = 'rgba(255, 64, 255, 0.7)';
+    mmCtx.lineWidth = 2;
+    mmCtx.stroke();
+  }
+
+  // Снаряды босса
+  for (const p of bossProjectiles) {
+    const mp = worldToMinimap(p.position.x, p.position.z);
+    mmCtx.beginPath();
+    mmCtx.arc(mp.x, mp.y, 2.5, 0, Math.PI * 2);
+    mmCtx.fillStyle = '#88ff44';
     mmCtx.fill();
   }
 
@@ -1441,7 +2290,6 @@ function drawMinimap() {
     mmCtx.stroke();
   }
 
-  // Снаряды рогатки
   for (const p of projectiles) {
     const mp = worldToMinimap(p.position.x, p.position.z);
     mmCtx.beginPath();
@@ -1459,7 +2307,6 @@ function drawMinimap() {
   mmCtx.lineWidth = 1.5;
   mmCtx.stroke();
 
-  // Радиус мешка на миникарте
   if (equippedWeapons.bag && bagMesh) {
     const bp = worldToMinimap(bagMesh.position.x, bagMesh.position.z);
     mmCtx.beginPath();
@@ -1492,7 +2339,9 @@ function loop(now) {
   last = now;
 
   if (gameActive && !paused) {
-    // --- движение героя ---
+    updateJump(dt);
+
+    // Движение героя
     let mx = 0, mz = 0;
     if (keys.w || keys.up) mz -= 1;
     if (keys.s || keys.down) mz += 1;
@@ -1530,35 +2379,52 @@ function loop(now) {
 
     hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
     hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
-    heroGroup.position.set(hero.x, 0, hero.z);
+    heroGroup.position.set(hero.x, hero.height, hero.z);
 
-    // анимация ходьбы
-    const swing = Math.sin(hero.walkPhase) * 0.4;
-    legL.rotation.x = swing;
-    legR.rotation.x = -swing;
-    armL.rotation.x = -swing * 0.7;
-    armR.rotation.x = swing * 0.7;
-    torso.position.y = 1.5 + Math.abs(Math.sin(hero.walkPhase)) * 0.06;
+    if (!hero.isJumping) {
+      const swing = Math.sin(hero.walkPhase) * 0.4;
+      legL.rotation.x = swing;
+      legR.rotation.x = -swing;
+      armL.rotation.x = -swing * 0.7;
+      armR.rotation.x = swing * 0.7;
+      torso.position.y = 1.5 + Math.abs(Math.sin(hero.walkPhase)) * 0.06;
+    }
+
+    if (hero.attackTimer > 0) {
+      hero.attackTimer -= dt;
+      const t = Math.max(0, hero.attackTimer / 0.18);
+      armR.rotation.x = -1.8 * t;
+      heroGroup.rotation.y = hero.attackAngle + Math.PI;
+    } else if (!(mx || mz) && !hero.isJumping) {
+      armR.rotation.x *= 0.85;
+    }
+
+    if (hero.isJumping) {
+      legL.rotation.x = -0.9;
+      legR.rotation.x = -0.9;
+      armL.rotation.x = -1.5;
+      if (hero.attackTimer <= 0) {
+        armR.rotation.x = -1.5;
+      }
+      torso.position.y = 1.5;
+    }
 
     if (stats.regen > 0) {
       hp = Math.min(stats.maxHp, hp + stats.regen * dt);
     }
     updateHud();
 
-    // --- анимация удара рюкзаком ---
-    if (hero.attackTimer > 0) {
-      hero.attackTimer -= dt;
-      const t = Math.max(0, hero.attackTimer / 0.18);
-      armR.rotation.x = -1.8 * t;
-      heroGroup.rotation.y = hero.attackAngle + Math.PI;
-    } else if (!(mx || mz)) {
-      armR.rotation.x *= 0.85;
-    }
-
-    // --- оружие работает всегда ---
     useWeapons(dt);
+    updateXpOrbs(dt);
 
-    // --- враги ---
+    updateZones(dt);
+    updateZoneHUD();
+
+    // БОСС
+    updateBoss(dt);
+    updateBossProjectiles(dt);
+
+    // Враги
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
       e.wobble += dt * 6;
@@ -1581,13 +2447,11 @@ function loop(now) {
         continue;
       }
 
-      // отброс
       e.x += e.kbX * dt;
       e.z += e.kbZ * dt;
       e.kbX *= 0.88;
       e.kbZ *= 0.88;
 
-      // движение к герою
       const dx = hero.x - e.x;
       const dz = hero.z - e.z;
       const d = Math.hypot(dx, dz) || 1;
@@ -1613,29 +2477,30 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
-      // Столкновение героя с врагом (урон теперь выше)
-      if (d < 1.3) {
+      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT) {
         hp -= e.damage * dt * 4;
         if (hp <= 0 && gameActive) {
           hp = 0;
           gameActive = false;
+          document.getElementById('bossHud').classList.remove('active');
           showGameOver();
         }
         updateHud();
       }
     }
 
-    // --- спавн ---
+    // Спавн врагов (реже во время боя с боссом)
     spawnTimer += dt;
-    const interval = Math.max(0.3, 1.1 - level * 0.04);
+    const spawnMultiplier = boss.active ? 2.2 : 1;
+    const interval = Math.max(0.3, (1.1 - level * 0.04)) * spawnMultiplier;
     if (spawnTimer > interval) {
       spawnTimer = 0;
-      const count = 1 + Math.floor(level / 4);
+      const count = boss.active ? 1 : (1 + Math.floor(level / 4));
       for (let i = 0; i < Math.min(count, 5); i++) spawnEnemy();
     }
   }
 
-  // --- частицы ---
+  // Частицы
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.userData.life -= dt;
@@ -1668,9 +2533,15 @@ function reset() {
   overlay.classList.remove('active');
   weaponOverlay.classList.remove('active');
   gameoverEl.classList.remove('active');
+  document.getElementById('zoneAlert').style.display = 'none';
+  document.getElementById('bossHud').classList.remove('active');
   levelUpQueue = 0;
   weaponChoiceQueue = 0;
   nextWeaponLevel = 5;
+  nextRescueLevel = 4;
+  nextBossLevel = 10;
+  jumpCooldownBonus = 0;
+  lastBuffZoneSpawn = performance.now();
 
   score = 0;
   level = 1;
@@ -1680,22 +2551,36 @@ function reset() {
 
   stats.maxHp = 100;
   stats.speed = 8;
-  stats.damage = 30;
-  stats.radius = 3.5;
-  stats.cooldown = 400;
+  stats.damage = 8;
+  stats.radius = 3.0;
+  stats.cooldown = 700;
   stats.regen = 0;
-  stats.magnet = 4;
+  stats.magnet = 2.5;
 
   hp = stats.maxHp;
   hero.x = 0;
   hero.z = -20;
   hero.attackTimer = 0;
   hero.walkPhase = 0;
+  hero.isJumping = false;
+  hero.jumpTimer = 0;
+  hero.jumpCooldown = 0;
+  hero.height = 0;
 
   heroGroup.position.set(0, 0, -20);
   heroGroup.rotation.y = 0;
 
-  // Убираем всё оружие
+  // Сброс босса
+  if (boss.active) {
+    scene.remove(boss.mesh);
+    scene.remove(boss.aura);
+  }
+  boss.active = false;
+  boss.mesh = null;
+  boss.aura = null;
+  bossProjectiles.forEach(p => scene.remove(p));
+  bossProjectiles.length = 0;
+
   for (const k in equippedWeapons) delete equippedWeapons[k];
   weaponTimers.pen = 0;
   weaponTimers.ruler = 0;
@@ -1704,15 +2589,20 @@ function reset() {
   rebuildWeaponMeshes();
   updateWeaponHud();
 
-  // Очистка
   enemies.forEach(e => scene.remove(e.mesh));
   enemies.length = 0;
 
   particles.forEach(p => scene.remove(p));
   particles.length = 0;
 
+  xpOrbs.forEach(o => scene.remove(o.mesh));
+  xpOrbs.length = 0;
+
   projectiles.forEach(p => scene.remove(p));
   projectiles.length = 0;
+
+  zones.forEach(z => scene.remove(z.group));
+  zones.length = 0;
 
   updateHud();
 }

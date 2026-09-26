@@ -15,10 +15,21 @@
     <div class="panel" id="weaponPanel">📚 <span id="weaponInfo">—</span></div>
   </div>
 
+  <div id="bossHud">
+    <div class="bossTitle">💀 БОСС: ХИМИЯ 💀</div>
+    <div class="bossBar"><span id="bossHpBar"></span></div>
+    <div class="bossInfo">
+      <span>HP: <b id="bossHpText">0 / 0</b></span>
+      <span>⏱ <b id="bossTime">1:30</b></span>
+    </div>
+  </div>
+
   <canvas id="minimap" width="220" height="220"></canvas>
 
+  <div id="zoneAlert"></div>
+
   <button id="restart">ЗАНОВО</button>
-  <div id="hint">WASD / стрелки — движение · ПРОБЕЛ — удар · Q — применить оружие</div>
+  <div id="hint">WASD / стрелки — движение · ПРОБЕЛ — удар · SHIFT — прыжок</div>
 
   <div id="levelup">
     <h1>УРОВЕНЬ ПОВЫШЕН!</h1>
@@ -34,7 +45,7 @@
 
   <div id="gameover">
     <h1>ВЫ ПРОИГРАЛИ</h1>
-    <div class="subtitle">Грифоню завалили учебниками...</div>
+    <div class="subtitle" id="gameoverSubtitle">Грифоню завалили учебниками...</div>
     <div class="stats">
       <div class="stat">
         <div class="label">Уровень</div>
