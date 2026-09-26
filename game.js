@@ -4036,3 +4036,325 @@ addEventListener('resize', () => {
 // =====================================================
 reset();
 requestAnimationFrame(loop);
+
+// =====================================================
+//  ЧИТ-ПАНЕЛЬ ДЛЯ БЕТА-ТЕСТА
+//  ⚠ УДАЛИТЬ ПЕРЕД РЕЛИЗОМ
+// =====================================================
+function createCheatPanel() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #cheatPanel {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      width: 270px;
+      background: rgba(10, 15, 20, 0.94);
+      border: 2px solid #ffd966;
+      border-radius: 12px;
+      color: #e0e8f0;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      z-index: 900;
+      padding: 10px 12px;
+      display: none;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.8);
+    }
+    #cheatPanel.open { display: block; }
+    #cheatPanel h3 {
+      margin: 0 0 8px;
+      color: #ffd966;
+      font-size: 13px;
+      letter-spacing: 1px;
+      text-align: center;
+      border-bottom: 1px solid #ffd96650;
+      padding-bottom: 6px;
+    }
+    #cheatPanel .row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    #cheatPanel label {
+      flex: 0 0 72px;
+      color: #a0b8d0;
+    }
+    #cheatPanel input {
+      flex: 1;
+      background: #1a2530;
+      border: 1px solid #3a4a5a;
+      color: #e0e8f0;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+      min-width: 0;
+    }
+    #cheatPanel button {
+      background: #2a4a6a;
+      color: #e0e8f0;
+      border: 1px solid #4a6a8a;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      transition: 0.1s;
+    }
+    #cheatPanel button:hover { background: #3a5a7a; }
+    #cheatPanel button:active { background: #1a3a5a; }
+    #cheatPanel .sect {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #ffd96630;
+    }
+    #cheatPanel .info {
+      color: #7a8a9a;
+      font-size: 10px;
+      text-align: center;
+      margin-top: 6px;
+      line-height: 1.3;
+    }
+    #cheatToggle {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 901;
+      background: rgba(10, 15, 20, 0.8);
+      color: #ffd966;
+      border: 2px solid #ffd966;
+      border-radius: 8px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-family: 'Consolas', monospace;
+      font-weight: 900;
+      font-size: 12px;
+      display: block;
+    }
+    #cheatToggle:hover { background: rgba(255, 217, 102, 0.15); }
+    #cheatToggle.hidden { display: none; }
+  `;
+  document.head.appendChild(style);
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.id = 'cheatToggle';
+  toggleBtn.textContent = '⚙ ЧИТЫ [F2]';
+  document.body.appendChild(toggleBtn);
+
+  const panel = document.createElement('div');
+  panel.id = 'cheatPanel';
+  panel.innerHTML = `
+    <h3>⚙ ЧИТ-ПАНЕЛЬ [F2]</h3>
+
+    <div class="row">
+      <label>Max HP</label>
+      <input type="number" id="cheatMaxHp" min="1" step="10">
+      <button id="cheatSetMaxHp">OK</button>
+    </div>
+
+    <div class="row">
+      <label>HP</label>
+      <input type="number" id="cheatHp" min="0" step="10">
+      <button id="cheatSetHp">OK</button>
+    </div>
+
+    <div class="row">
+      <button id="cheatFullHp" style="flex:1;">❤ Полное HP</button>
+    </div>
+
+    <div class="row">
+      <label>Уровень</label>
+      <input type="number" id="cheatLevel" min="1" max="200">
+      <button id="cheatSetLevel">OK</button>
+    </div>
+
+    <div class="row">
+      <button id="cheatLevelUp1" style="flex:1;">+1</button>
+      <button id="cheatLevelUp5" style="flex:1;">+5</button>
+      <button id="cheatLevelUp10" style="flex:1;">+10</button>
+    </div>
+
+    <div class="sect">
+      <div class="row">
+        <button id="cheatAllWeapons" style="flex:1;">🎒 Всё оружие (макс)</button>
+      </div>
+      <div class="row">
+        <button id="cheatSpawnBoss" style="flex:1;">👹 Босс</button>
+        <button id="cheatKillBoss" style="flex:1;">💀 Убить</button>
+      </div>
+      <div class="row">
+        <button id="cheatSpawnStatue" style="flex:1;">🗿 Статуя</button>
+        <button id="cheatAddXp" style="flex:1;">+500 XP</button>
+      </div>
+      <div class="row">
+        <button id="cheatKillAll" style="flex:1;">⚔ Убить всех врагов</button>
+      </div>
+    </div>
+
+    <div class="info">Повышение уровня открывает карточки<br>и выбор оружия по стандартным правилам</div>
+  `;
+  document.body.appendChild(panel);
+
+  let panelOpen = false;
+
+  function refreshCheatValues() {
+    document.getElementById('cheatMaxHp').value = Math.round(stats.maxHp);
+    document.getElementById('cheatHp').value = Math.round(hp);
+    document.getElementById('cheatLevel').value = level;
+  }
+
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    panel.classList.toggle('open', panelOpen);
+    toggleBtn.classList.toggle('hidden', panelOpen);
+    if (panelOpen) refreshCheatValues();
+  }
+
+  toggleBtn.onclick = togglePanel;
+
+  addEventListener('keydown', e => {
+    if (e.code === 'F2') {
+      e.preventDefault();
+      togglePanel();
+    }
+  });
+
+  // ---------- MAX HP ----------
+  document.getElementById('cheatSetMaxHp').onclick = () => {
+    const v = parseFloat(document.getElementById('cheatMaxHp').value);
+    if (!isNaN(v) && v > 0) {
+      stats.maxHp = v;
+      if (hp > stats.maxHp) hp = stats.maxHp;
+      updateHud();
+      refreshCheatValues();
+    }
+  };
+
+  // ---------- ТЕКУЩЕЕ HP ----------
+  document.getElementById('cheatSetHp').onclick = () => {
+    const v = parseFloat(document.getElementById('cheatHp').value);
+    if (!isNaN(v) && v >= 0) {
+      hp = Math.min(v, stats.maxHp);
+      updateHud();
+      refreshCheatValues();
+    }
+  };
+
+  document.getElementById('cheatFullHp').onclick = () => {
+    hp = stats.maxHp;
+    updateHud();
+    refreshCheatValues();
+  };
+
+  // ---------- УРОВЕНЬ ----------
+  document.getElementById('cheatSetLevel').onclick = () => {
+    const v = parseInt(document.getElementById('cheatLevel').value);
+    if (!isNaN(v) && v >= 1) setLevel(v);
+  };
+  document.getElementById('cheatLevelUp1').onclick  = () => setLevel(level + 1);
+  document.getElementById('cheatLevelUp5').onclick  = () => setLevel(level + 5);
+  document.getElementById('cheatLevelUp10').onclick = () => setLevel(level + 10);
+
+  // ---------- ВСЁ ОРУЖИЕ ----------
+  document.getElementById('cheatAllWeapons').onclick = () => {
+    for (const w of WEAPONS) {
+      equippedWeapons[w.id] = { level: w.maxLevel };
+    }
+    updateWeaponHud();
+    rebuildWeaponMeshes();
+  };
+
+  // ---------- БОСС ----------
+  document.getElementById('cheatSpawnBoss').onclick = () => {
+    if (!boss.active) spawnBoss();
+  };
+  document.getElementById('cheatKillBoss').onclick = () => {
+    if (boss.active) killBoss();
+  };
+
+  // ---------- ПРОЧЕЕ ----------
+  document.getElementById('cheatSpawnStatue').onclick = () => spawnStatue();
+  document.getElementById('cheatAddXp').onclick = () => addXP(500);
+  document.getElementById('cheatKillAll').onclick = () => {
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.dying) continue;
+      e.hp = 0;
+      killEnemy(e, i);
+    }
+  };
+}
+
+// =====================================================
+//  УСТАНОВКА УРОВНЯ С ОБРАБОТКОЙ ВСЕХ ПОРОГОВ
+// =====================================================
+function calcXpForLevel(lvl) {
+  let xpNeed = 30;
+  for (let i = 1; i < lvl; i++) {
+    xpNeed = Math.floor(xpNeed * 1.35 + 10);
+  }
+  return xpNeed;
+}
+
+function setLevel(target) {
+  target = Math.max(1, Math.min(200, Math.floor(target)));
+  if (target === level) return;
+
+  // Закрываем любые открытые модалки
+  if (paused) {
+    overlay.classList.remove('active');
+    weaponOverlay.classList.remove('active');
+    paused = false;
+  }
+
+  const oldLevel = level;
+
+  // Очереди формируются заново
+  levelUpQueue = 0;
+  weaponChoiceQueue = 0;
+
+  if (target > oldLevel) {
+    // --- ПОВЫШЕНИЕ ---
+    // Обычные прокачки — по одной на каждый новый уровень
+    for (let l = oldLevel + 1; l <= target; l++) levelUpQueue++;
+
+    // Карточки оружия — каждые 5 уровней
+    while (nextWeaponLevel <= target) {
+      weaponChoiceQueue++;
+      nextWeaponLevel += 5;
+    }
+
+    // Зоны спасения — каждые 4 уровня
+    while (nextRescueLevel <= target) {
+      spawnRescueZone();
+      nextRescueLevel += 4;
+    }
+
+    // Восстановление HP как при обычном level-up
+    const levelsGained = target - oldLevel;
+    hp = Math.min(stats.maxHp, hp + stats.maxHp * 0.2 * levelsGained);
+  } else {
+    // --- ПОНИЖЕНИЕ ---
+    // Пересчитываем следующие пороги
+    nextWeaponLevel = Math.floor(target / 5) * 5 + 5;
+    nextRescueLevel = Math.floor(target / 4) * 4 + 4;
+  }
+
+  level = target;
+  xp = 0;
+  xpNext = calcXpForLevel(level);
+
+  updateHud();
+
+  // Открываем первую из накопленных очередей
+  if (weaponChoiceQueue > 0 && gameActive) {
+    openWeaponChoice();
+  } else if (levelUpQueue > 0 && gameActive) {
+    openLevelUp();
+  }
+}
+
+// Запуск чит-панели
+createCheatPanel();
