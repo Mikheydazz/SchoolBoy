@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CHARACTERS } from './characters.js';
 
 // =====================================================
 //  СЦЕНА, КАМЕРА, РЕНДЕРЕР
@@ -153,161 +154,45 @@ function buildHouses() {
 buildHouses();
 
 // =====================================================
-//  ГЕРОЙ
+//  ГЕРОЙ — контейнеры и фабрика персонажа
 // =====================================================
 const heroGroup = new THREE.Group();
 scene.add(heroGroup);
 
-const skinMat     = new THREE.MeshLambertMaterial({ color: 0xf5d6a8 });
-const shirtMat    = new THREE.MeshLambertMaterial({ color: 0x4a6ea8 });
-const pantsMat    = new THREE.MeshLambertMaterial({ color: 0x3a3a5a });
-const shoeMat     = new THREE.MeshLambertMaterial({ color: 0x2a2a1a });
-const hairMat     = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
-const backpackMat = new THREE.MeshLambertMaterial({ color: 0xb57c4a });
-const tieMat      = new THREE.MeshLambertMaterial({ color: 0xa02020 });
-const eyeMat      = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const pupilMat    = new THREE.MeshBasicMaterial({ color: 0x1a0a0a });
+// Куда добавляется меш текущего персонажа (оружие крепится прямо к heroGroup)
+const characterRoot = new THREE.Group();
+heroGroup.add(characterRoot);
 
-const torso = new THREE.Mesh(new THREE.SphereGeometry(1.1, 20, 16), shirtMat);
-torso.position.y = 1.5;
-torso.scale.set(1.1, 1.15, 0.85);
-torso.castShadow = true;
-heroGroup.add(torso);
+let currentCharacter = null;
+let selectedCharacterId = null;
 
-const belly = new THREE.Mesh(new THREE.SphereGeometry(0.85, 16, 12), shirtMat);
-belly.position.set(0, 1.05, 0.35);
-belly.scale.set(1.0, 0.9, 0.9);
-belly.castShadow = true;
-heroGroup.add(belly);
+function instantiateCharacter(charDef) {
+  // Очищаем корень от предыдущего персонажа
+  while (characterRoot.children.length > 0) {
+    characterRoot.remove(characterRoot.children[0]);
+  }
+  currentCharacter = charDef.build();
+  characterRoot.add(currentCharacter.group);
 
-const tie = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.7, 4), tieMat);
-tie.position.set(0, 1.55, 0.95);
-tie.rotation.x = Math.PI;
-heroGroup.add(tie);
+  // Применяем базовые статы
+  stats.maxHp = charDef.stats.maxHp;
+  stats.speed = charDef.stats.speed;
+  stats.damage = charDef.stats.damage;
+  stats.radius = charDef.stats.radius;
+  stats.cooldown = charDef.stats.cooldown;
+  stats.jumpCooldown = charDef.stats.jumpCooldown || 2000;
+  stats.regen = charDef.stats.regen;
+  stats.magnet = charDef.stats.magnet;
 
-const head = new THREE.Mesh(new THREE.SphereGeometry(0.62, 20, 16), skinMat);
-head.position.y = 2.85;
-head.castShadow = true;
-heroGroup.add(head);
+  hp = stats.maxHp;
 
-const cheekL = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), skinMat);
-cheekL.position.set(-0.35, 2.75, 0.5);
-heroGroup.add(cheekL);
-const cheekR = cheekL.clone();
-cheekR.position.x = 0.35;
-heroGroup.add(cheekR);
+  hero.height = 0;
+  hero.walkPhase = 0;
+  hero.isJumping = false;
+  hero.attackTimer = 0;
 
-const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), eyeMat);
-eyeL.position.set(-0.2, 2.95, 0.52);
-heroGroup.add(eyeL);
-const eyeR = eyeL.clone();
-eyeR.position.x = 0.2;
-heroGroup.add(eyeR);
-
-const pupilL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), pupilMat);
-pupilL.position.set(-0.2, 2.95, 0.62);
-heroGroup.add(pupilL);
-const pupilR = pupilL.clone();
-pupilR.position.x = 0.2;
-heroGroup.add(pupilR);
-
-const mouth = new THREE.Mesh(
-  new THREE.TorusGeometry(0.12, 0.035, 6, 12, Math.PI),
-  pupilMat
-);
-mouth.position.set(0, 2.65, 0.55);
-mouth.rotation.z = Math.PI;
-heroGroup.add(mouth);
-
-// =====================================================
-//  ВИЗУАЛЬНЫЕ ЭЛЕМЕНТЫ КРАСАВЦА (появляются при бафе молота)
-// =====================================================
-
-// Волевой подбородок
-const chin = new THREE.Mesh(
-  new THREE.BoxGeometry(0.75, 0.3, 0.55),
-  skinMat
-);
-chin.position.set(0, 2.4, 0.35);
-chin.visible = false;
-chin.castShadow = true;
-heroGroup.add(chin);
-
-// Крутые очки
-const sunglasses = new THREE.Group();
-const glassMat = new THREE.MeshLambertMaterial({ color: 0x1a1a2a });
-const lensL = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.05), glassMat);
-lensL.position.set(-0.22, 2.9, 0.6);
-sunglasses.add(lensL);
-const lensR = lensL.clone();
-lensR.position.x = 0.22;
-sunglasses.add(lensR);
-const glassBridge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.05), glassMat);
-glassBridge.position.set(0, 2.9, 0.6);
-sunglasses.add(glassBridge);
-const glassArmL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.5), glassMat);
-glassArmL.position.set(-0.4, 2.9, 0.35);
-sunglasses.add(glassArmL);
-const glassArmR = glassArmL.clone();
-glassArmR.position.x = 0.4;
-sunglasses.add(glassArmR);
-sunglasses.visible = false;
-heroGroup.add(sunglasses);
-
-const hair = new THREE.Mesh(
-  new THREE.SphereGeometry(0.64, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-  hairMat
-);
-hair.position.y = 2.9;
-heroGroup.add(hair);
-
-const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.5), backpackMat);
-backpack.position.set(0, 1.6, -1.05);
-backpack.castShadow = true;
-heroGroup.add(backpack);
-
-const backpackTop = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.25, 0.35), backpackMat);
-backpackTop.position.set(0, 2.15, -1.0);
-heroGroup.add(backpackTop);
-
-function makeArm(side) {
-  const arm = new THREE.Group();
-  const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 6, 12), shirtMat);
-  upper.position.y = -0.35;
-  upper.castShadow = true;
-  arm.add(upper);
-
-  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), skinMat);
-  hand.position.y = -0.9;
-  hand.castShadow = true;
-  arm.add(hand);
-
-  arm.position.set(side * 1.15, 2.0, 0);
-  arm.rotation.z = side * 0.15;
-  return arm;
+  updateHud();
 }
-const armL = makeArm(-1);
-const armR = makeArm(1);
-heroGroup.add(armL, armR);
-
-function makeLeg(side) {
-  const leg = new THREE.Group();
-  const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.6, 6, 12), pantsMat);
-  thigh.position.y = -0.4;
-  thigh.castShadow = true;
-  leg.add(thigh);
-
-  const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.25, 0.65), shoeMat);
-  shoe.position.set(0, -0.85, 0.12);
-  shoe.castShadow = true;
-  leg.add(shoe);
-
-  leg.position.set(side * 0.42, 0.85, 0);
-  return leg;
-}
-const legL = makeLeg(-1);
-const legR = makeLeg(1);
-heroGroup.add(legL, legR);
 
 // =====================================================
 //  ИНДИКАТОР РАДИУСА АТАКИ
@@ -341,6 +226,16 @@ const attackArc = new THREE.Mesh(attackArcGeo, attackArcMat);
 attackArc.rotation.x = -Math.PI / 2;
 attackArc.position.y = 0.06;
 scene.add(attackArc);
+// Широкий сектор для Колобка: ±80°
+const attackArcWideGeo = new THREE.CircleGeometry(1, 32, -1.4, 2.8);
+const attackArcWideMat = new THREE.MeshBasicMaterial({
+  color: 0xffa040, transparent: true, opacity: 0,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const attackArcWide = new THREE.Mesh(attackArcWideGeo, attackArcWideMat);
+attackArcWide.rotation.x = -Math.PI / 2;
+attackArcWide.position.y = 0.06;
+scene.add(attackArcWide);
 
 // =====================================================
 //  ПРЫЖОК
@@ -793,28 +688,11 @@ function rebuildWeaponMeshes() {
 //  ПРЕВРАЩЕНИЕ ГЕРОЯ (баф молота)
 // =====================================================
 function applyHeroTransform() {
-  // Скрываем пухлое
-  belly.visible = false;
-  cheekL.visible = false;
-  cheekR.visible = false;
-  mouth.visible = true;    // оставляем (может быть, улыбка)
-
-  // Меняем пропорции торса: тоньше и выше
-  torso.scale.set(0.95, 1.3, 0.7);
-
-  // Показываем волевой подбородок и очки
-  chin.visible = true;
-  sunglasses.visible = true;
+  if (currentCharacter) currentCharacter.applyTransform();
 }
 
 function revertHeroTransform() {
-  belly.visible = true;
-  cheekL.visible = true;
-  cheekR.visible = true;
-  torso.scale.set(1.1, 1.15, 0.85);
-  torso.position.y = 1.5;
-  chin.visible = false;
-  sunglasses.visible = false;
+  if (currentCharacter) currentCharacter.revertTransform();
 }
 
 let _lastWeaponHudText = '';
@@ -2115,11 +1993,40 @@ function updateZoneHUD() {
 // =====================================================
 //  ВВОД
 // =====================================================
+
+// =====================================================
+//  МЫШЬ — прицел для Колобка
+// =====================================================
+const mouseNDC = new THREE.Vector2(0, 0);
+const mouseRaycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const mouseWorld = new THREE.Vector3(0, 0, 0);
+
+addEventListener('mousemove', e => {
+  mouseNDC.x = (e.clientX / innerWidth) * 2 - 1;
+  mouseNDC.y = -(e.clientY / innerHeight) * 2 + 1;
+});
+
+// Пересчёт экранных координат мыши в мировую точку на плоскости Y=0
+function updateMouseWorld() {
+  mouseRaycaster.setFromCamera(mouseNDC, camera);
+  mouseRaycaster.ray.intersectPlane(groundPlane, mouseWorld);
+}
+
+// Угол от героя к курсору мыши
+function getMouseAimAngle() {
+  updateMouseWorld();
+  return Math.atan2(mouseWorld.z - hero.z, mouseWorld.x - hero.x);
+}
+
 const keys = {
   w: 0, a: 0, s: 0, d: 0,
   up: 0, left: 0, down: 0, right: 0,
   space: 0, shift: 0,
 };
+
+// Аналоговый ввод с мобильного джойстика (-1..1)
+const mobileInput = { mx: 0, mz: 0 };
 
 addEventListener('keydown', e => {
   const c = e.code;
@@ -2781,18 +2688,22 @@ function doAttack() {
     const heightRatio = Math.min(1, hero.height / maxHeight);
     const damage = stats.damage * (1 + heightRatio * (JUMP_ATTACK_MULT - 1));
 
-    // Направление — на ближайшего
-    let nearest = null, nd = Infinity;
-    for (const e of enemies) {
-      if (e.dying) continue;
-      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
-      if (d < nd) { nd = d; nearest = e; }
+    // Направление прыжкового удара
+    if (currentCharacter && currentCharacter.isRoller) {
+      hero.attackAngle = getMouseAimAngle();
+    } else {
+      let nearest = null, nd = Infinity;
+      for (const e of enemies) {
+        if (e.dying) continue;
+        const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+        if (d < nd) { nd = d; nearest = e; }
+      }
+      if (boss.active) {
+        const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+        if (bd < nd) { nd = bd; nearest = { x: boss.x, z: boss.z }; }
+      }
+      if (nearest) hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
     }
-    if (boss.active) {
-      const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
-      if (bd < nd) { nd = bd; nearest = { x: boss.x, z: boss.z }; }
-    }
-    if (nearest) hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
 
     // Урон всем врагам в радиусе 360°
     for (let i = enemies.length - 1; i >= 0; i--) {
@@ -2844,19 +2755,27 @@ function doAttack() {
   // ============================================================
   hero.attackTimer = 0.18;
 
-  let nearest = null, nd = Infinity;
-  for (const e of enemies) {
-    if (e.dying || e.flyingToBoss) continue;
-    const d = Math.hypot(e.x - hero.x, e.z - hero.z);
-    if (d < nd) { nd = d; nearest = e; }
+  // Колобок бьёт в сторону мыши, Грифоня — в сторону ближайшего врага
+  if (currentCharacter && currentCharacter.isRoller) {
+    hero.attackAngle = getMouseAimAngle();
+  } else {
+    let nearest = null, nd = Infinity;
+    for (const e of enemies) {
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+      if (d < nd) { nd = d; nearest = e; }
+    }
+    if (boss.active) {
+      const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+      if (bd < nd) { nd = bd; nearest = { x: boss.x, z: boss.z }; }
+    }
+    if (nearest) {
+      hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
+    }
   }
-  if (boss.active) {
-    const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
-    if (bd < nd) { nd = bd; nearest = { x: boss.x, z: boss.z }; }
-  }
-  if (nearest) {
-    hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
-  }
+
+    // Полураствор сектора — у Колобка шире
+  const attackHalfAngle = (currentCharacter && currentCharacter.isRoller) ? 1.4 : 1.15;
 
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
@@ -2869,7 +2788,7 @@ function doAttack() {
 
     let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
     diff = Math.min(diff, Math.PI * 2 - diff);
-    if (diff > 1.15) continue;
+    if (diff > attackHalfAngle) continue;
 
     e.hp -= stats.damage;
     const kb = 12;
@@ -2886,7 +2805,7 @@ function doAttack() {
     if (dist < stats.radius + boss.r) {
       let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
       diff = Math.min(diff, Math.PI * 2 - diff);
-      if (diff <= 1.15) damageBoss(stats.damage);
+      if (diff <= attackHalfAngle) damageBoss(stats.damage);
     }
   }
 
@@ -2898,7 +2817,7 @@ function doAttack() {
     if (dist > stats.radius + s.r) continue;
     let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
     diff = Math.min(diff, Math.PI * 2 - diff);
-    if (diff <= 1.15) damageStatue(s, i, stats.damage);
+    if (diff <= attackHalfAngle) damageStatue(s, i, stats.damage);
   }
 }
 
@@ -3368,14 +3287,31 @@ function updateAttackIndicator() {
 
   attackArc.position.x = hero.x;
   attackArc.position.z = hero.z;
+  attackArcWide.position.x = hero.x;
+  attackArcWide.position.z = hero.z;
+
+    const isRoller = currentCharacter && currentCharacter.isRoller;
+
+  // Скрываем оба сектора по умолчанию
+  attackArcMat.opacity = 0;
+  attackArcWideMat.opacity = 0;
 
   if (hero.attackTimer > 0) {
     const t = hero.attackTimer / 0.18;
-    attackArc.scale.set(r, r, r);
-    attackArc.rotation.z = -hero.attackAngle + Math.PI / 2;
-    attackArcMat.opacity = t * 0.55;
-  } else {
-    attackArcMat.opacity = 0;
+    if (isRoller) {
+      attackArcWide.scale.set(r, r, r);
+      attackArcWide.rotation.z = -hero.attackAngle;
+      attackArcWideMat.opacity = t * 0.8;
+    } else {
+      attackArc.scale.set(r, r, r);
+      attackArc.rotation.z = -hero.attackAngle;
+      attackArcMat.opacity = t * 0.55;
+    }
+  } else if (isRoller) {
+    // Прицел Колобка виден всегда
+    attackArcWide.scale.set(r, r, r);
+    attackArcWide.rotation.z = -hero.attackAngle;
+    attackArcWideMat.opacity = 0.3;
   }
 
   if (hero.attackTimer > 0) {
@@ -3400,7 +3336,7 @@ function updateJump(dt) {
       gameActive && !paused && !hammerSlamState.active) {
     hero.isJumping = true;
     hero.jumpTimer = JUMP_DURATION;
-    hero.jumpCooldown = Math.max(600, JUMP_COOLDOWN - jumpCooldownBonus);
+    hero.jumpCooldown = Math.max(600, (stats.jumpCooldown || 2000) - jumpCooldownBonus);
     keys.shift = 0;
   }
 
@@ -3648,6 +3584,9 @@ function loop(now) {
       if (keys.s || keys.down) mz += 1;
       if (keys.a || keys.left) mx -= 1;
       if (keys.d || keys.right) mx += 1;
+      // Мобильный джойстик
+      mx += mobileInput.mx;
+      mz += mobileInput.mz;
     }
 
     if (mx || mz) {
@@ -3684,33 +3623,33 @@ function loop(now) {
     hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
     hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
     heroGroup.position.set(hero.x, hero.height, hero.z);
-
-    if (!hero.isJumping) {
-      const swing = Math.sin(hero.walkPhase) * 0.4;
-      legL.rotation.x = swing;
-      legR.rotation.x = -swing;
-      armL.rotation.x = -swing * 0.7;
-      armR.rotation.x = swing * 0.7;
-      torso.position.y = 1.5 + Math.abs(Math.sin(hero.walkPhase)) * 0.06;
+        // Колобок: прицел всегда следует за мышью (для индикатора сектора)
+    if (currentCharacter && currentCharacter.isRoller) {
+      hero.attackAngle = getMouseAimAngle();
     }
 
-    if (hero.attackTimer > 0) {
-      hero.attackTimer -= dt;
-      const t = Math.max(0, hero.attackTimer / 0.18);
-      armR.rotation.x = -1.8 * t;
-      heroGroup.rotation.y = hero.attackAngle + Math.PI;
-    } else if (!(mx || mz) && !hero.isJumping) {
-      armR.rotation.x *= 0.85;
-    }
-
-    if (hero.isJumping) {
-      legL.rotation.x = -0.9;
-      legR.rotation.x = -0.9;
-      armL.rotation.x = -1.5;
-      if (hero.attackTimer <= 0) {
-        armR.rotation.x = -1.5;
+        // Анимация текущего персонажа
+    if (currentCharacter) {
+      // Базовая анимация (ходьба/прыжок)
+      if (!hero.isJumping) {
+        currentCharacter.setWalk(hero.walkPhase, !!(mx || mz));
       }
-      torso.position.y = 1.5;
+
+      // Атака перебивает базовую позу
+      if (hero.attackTimer > 0) {
+        hero.attackTimer -= dt;
+        const t = Math.max(0, hero.attackTimer / 0.18);
+        currentCharacter.setAttack(t);
+        // Грифоня разворачивается к цели, Колобок — только крутится
+        if (!currentCharacter.isRoller) {
+          heroGroup.rotation.y = hero.attackAngle + Math.PI;
+        }
+      }
+
+      // Прыжок — только если не в атаке
+      if (hero.isJumping) {
+        currentCharacter.setJump(hero.attackTimer > 0);
+      }
     }
 
     if (stats.regen > 0) {
@@ -3940,13 +3879,11 @@ function reset() {
   xpNext = 30;
   kills = 0;
 
-  stats.maxHp = 100;
-  stats.speed = 8;
-  stats.damage = 8;
-  stats.radius = 3.0;
-  stats.cooldown = 700;
-  stats.regen = 0;
-  stats.magnet = 2.5;
+    // Применяем базовые статы выбранного персонажа (или дефолты)
+  if (selectedCharacterId) {
+    const charDef = CHARACTERS.find(c => c.id === selectedCharacterId);
+    if (charDef) instantiateCharacter(charDef);
+  }
 
   hp = stats.maxHp;
   hero.x = 0;
@@ -4032,9 +3969,372 @@ addEventListener('resize', () => {
 });
 
 // =====================================================
+//  ЭКРАН ВЫБОРА ПЕРСОНАЖА
+// =====================================================
+function createCharacterSelect() {
+  paused = true;
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #charSelect {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at center, #2a3a5a 0%, #0a1220 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 1500;
+      gap: 30px;
+      padding: 30px;
+      font-family: 'Segoe UI', 'Arial', sans-serif;
+    }
+    #charSelect h1 {
+      color: #ffd966;
+      font-size: 52px;
+      letter-spacing: 4px;
+      text-shadow: 5px 5px 0 #3a2e1e, 0 0 40px rgba(255,200,80,0.4);
+      text-align: center;
+    }
+    #charSelect .chars-grid {
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #charSelect .char-card {
+      width: 260px;
+      background: linear-gradient(160deg, #3b4f5e, #1e2b32);
+      border: 5px solid #6b5a3e;
+      border-radius: 24px;
+      padding: 24px 20px;
+      cursor: pointer;
+      text-align: center;
+      color: #ffeecc;
+      transition: 0.15s ease;
+      box-shadow: 0 10px 0 #0b1114, 0 16px 30px #000;
+    }
+    #charSelect .char-card:hover {
+      transform: translateY(-8px);
+      border-color: #ffd966;
+      box-shadow: 0 18px 0 #0b1114, 0 22px 40px #000;
+    }
+    #charSelect .char-card:active {
+      transform: translateY(0);
+    }
+    #charSelect .char-emoji {
+      font-size: 72px;
+      line-height: 1;
+      filter: drop-shadow(3px 4px 0 #00000066);
+    }
+    #charSelect .char-name {
+      color: #ffd966;
+      font-size: 28px;
+      font-weight: 900;
+      margin: 12px 0 8px;
+      letter-spacing: 1px;
+    }
+    #charSelect .char-desc {
+      color: #b8c9d6;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.4;
+      min-height: 60px;
+    }
+    #charSelect .char-stats {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #ffffff20;
+      font-size: 14px;
+      font-weight: 900;
+      color: #cfdde6;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'charSelect';
+  overlay.innerHTML = `
+    <h1>ВЫБЕРИ ПЕРСОНАЖА</h1>
+    <div class="chars-grid" id="charGrid"></div>
+  `;
+  document.body.appendChild(overlay);
+
+  const grid = document.getElementById('charGrid');
+  for (const char of CHARACTERS) {
+    const card = document.createElement('div');
+    card.className = 'char-card';
+    card.innerHTML = `
+      <div class="char-emoji">${char.emoji}</div>
+      <div class="char-name">${char.name}</div>
+      <div class="char-desc">${char.desc}</div>
+      <div class="char-stats">
+        <span>❤ ${char.stats.maxHp}</span>
+        <span>⚡ ${char.stats.speed}</span>
+        <span>💥 ${char.stats.damage}</span>
+      </div>
+    `;
+    card.onclick = () => {
+      selectedCharacterId = char.id;
+      overlay.remove();
+      reset();  // reset() выставит gameActive=true, paused=false и инстанцирует персонажа
+    };
+    grid.appendChild(card);
+  }
+}
+
+// =====================================================
+//  МОБИЛЬНОЕ УПРАВЛЕНИЕ (джойстик + кнопки)
+// =====================================================
+function createMobileControls() {
+  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!isTouch) return;
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #mobileControls {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 80;
+    }
+
+    /* ---------- Джойстик ---------- */
+    #joyBase {
+      position: absolute;
+      bottom: 30px;
+      left: 30px;
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.03) 70%);
+      border: 3px solid rgba(255,255,255,0.4);
+      box-shadow: inset 0 0 24px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.4);
+      pointer-events: auto;
+      touch-action: none;
+      user-select: none;
+    }
+    #joyKnob {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 62px;
+      height: 62px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffd966, #b88832);
+      border: 3px solid #5a3a1a;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.7);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: box-shadow 0.1s;
+    }
+    #joyBase.active #joyKnob {
+      box-shadow: 0 6px 16px rgba(0,0,0,0.9), 0 0 24px rgba(255,217,102,0.6);
+    }
+
+    /* ---------- Кнопки ---------- */
+    .mobileBtn {
+      position: absolute;
+      border-radius: 50%;
+      pointer-events: auto;
+      touch-action: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px;
+      font-weight: 900;
+      color: #fff;
+      text-shadow: 2px 2px 0 #000;
+      border: 4px solid rgba(255,255,255,0.55);
+      box-shadow: 0 6px 0 rgba(0,0,0,0.55), 0 12px 22px rgba(0,0,0,0.6);
+      transition: transform 0.05s, box-shadow 0.05s;
+    }
+    .mobileBtn.pressed {
+      transform: translateY(5px);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.55), 0 4px 8px rgba(0,0,0,0.6);
+    }
+    #btnAttack {
+      bottom: 36px;
+      right: 30px;
+      width: 96px;
+      height: 96px;
+      background: radial-gradient(circle at 35% 30%, #ff8080, #a02020);
+    }
+    #btnJump {
+      bottom: 150px;
+      right: 48px;
+      width: 82px;
+      height: 82px;
+      background: radial-gradient(circle at 35% 30%, #88ccff, #2a5a9a);
+    }
+
+    /* ---------- Адаптация остального UI ---------- */
+    @media (hover: none) and (pointer: coarse) {
+      #minimap {
+        width: 130px !important;
+        height: 130px !important;
+        top: 8px !important;
+        right: 8px !important;
+        bottom: auto !important;
+        left: auto !important;
+      }
+      #hud {
+        padding-right: 150px;
+      }
+      #hint {
+        display: none !important;
+      }
+      #restart {
+        top: 148px;
+        bottom: auto;
+        left: auto;
+        right: 8px;
+        transform: none;
+        font-size: 12px;
+        padding: 6px 14px;
+      }
+      #restart:active {
+        transform: translateY(3px);
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  const container = document.createElement('div');
+  container.id = 'mobileControls';
+  container.innerHTML = `
+    <div id="joyBase"><div id="joyKnob"></div></div>
+    <div class="mobileBtn" id="btnAttack">💥</div>
+    <div class="mobileBtn" id="btnJump">⤴</div>
+  `;
+  document.body.appendChild(container);
+
+  const joyBase = document.getElementById('joyBase');
+  const joyKnob = document.getElementById('joyKnob');
+  const btnAttack = document.getElementById('btnAttack');
+  const btnJump = document.getElementById('btnJump');
+
+  // ---------- Джойстик ----------
+  let joyActive = false;
+  let joyCenterX = 0, joyCenterY = 0;
+  const joyMaxRadius = 55;
+  const joyDeadzone = 0.18;
+
+  function getClientPos(e) {
+    if (e.touches && e.touches.length) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function startJoy(e) {
+    const rect = joyBase.getBoundingClientRect();
+    joyCenterX = rect.left + rect.width / 2;
+    joyCenterY = rect.top + rect.height / 2;
+    joyActive = true;
+    joyBase.classList.add('active');
+    moveJoy(e);
+  }
+
+  function moveJoy(e) {
+    if (!joyActive) return;
+    const pos = getClientPos(e);
+    let dx = pos.x - joyCenterX;
+    let dy = pos.y - joyCenterY;
+    const dist = Math.hypot(dx, dy);
+    if (dist > joyMaxRadius) {
+      dx = dx / dist * joyMaxRadius;
+      dy = dy / dist * joyMaxRadius;
+    }
+    joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+    let tmx = dx / joyMaxRadius;
+    let tmz = dy / joyMaxRadius;
+    // Дедзона — чтобы палец в покое не сдвигал героя
+    if (Math.hypot(tmx, tmz) < joyDeadzone) { tmx = 0; tmz = 0; }
+    mobileInput.mx = tmx;
+    mobileInput.mz = tmz;
+  }
+
+  function endJoy() {
+    if (!joyActive) return;
+    joyActive = false;
+    joyBase.classList.remove('active');
+    joyKnob.style.transform = 'translate(-50%, -50%)';
+    mobileInput.mx = 0;
+    mobileInput.mz = 0;
+  }
+
+  joyBase.addEventListener('touchstart',  e => { e.preventDefault(); startJoy(e); }, { passive: false });
+  joyBase.addEventListener('touchmove',   e => { e.preventDefault(); moveJoy(e);  }, { passive: false });
+  joyBase.addEventListener('touchend',    e => { e.preventDefault(); endJoy();   }, { passive: false });
+  joyBase.addEventListener('touchcancel', e => { endJoy(); });
+
+  // Fallback для отладки на десктопе
+  joyBase.addEventListener('mousedown', e => { e.preventDefault(); startJoy(e); });
+  addEventListener('mousemove', e => { if (joyActive) moveJoy(e); });
+  addEventListener('mouseup',   () => { if (joyActive) endJoy(); });
+
+  // ---------- Кнопка атаки ----------
+  btnAttack.addEventListener('touchstart', e => {
+    e.preventDefault();
+    btnAttack.classList.add('pressed');
+    if (gameActive && !paused) doAttack();
+  }, { passive: false });
+  btnAttack.addEventListener('touchend', e => {
+    e.preventDefault();
+    btnAttack.classList.remove('pressed');
+  }, { passive: false });
+  btnAttack.addEventListener('touchcancel', () => {
+    btnAttack.classList.remove('pressed');
+  });
+
+  // ---------- Кнопка прыжка (двойной тап → удар молотом) ----------
+  function handleJumpTap() {
+    const now = performance.now();
+    if (now - lastShiftTime < 300 && weaponLevel('hammer') >= 2 &&
+        hammerSlamCooldown <= 0 && !hammerSlamState.active) {
+      triggerHammerSlam();
+      lastShiftTime = 0;
+    } else {
+      keys.shift = 1;
+      lastShiftTime = now;
+      // Подстраховка — если прыжок не был съеден в этом кадре
+      setTimeout(() => { keys.shift = 0; }, 100);
+    }
+  }
+
+  btnJump.addEventListener('touchstart', e => {
+    e.preventDefault();
+    btnJump.classList.add('pressed');
+    handleJumpTap();
+  }, { passive: false });
+  btnJump.addEventListener('touchend', e => {
+    e.preventDefault();
+    btnJump.classList.remove('pressed');
+  }, { passive: false });
+  btnJump.addEventListener('touchcancel', () => {
+    btnJump.classList.remove('pressed');
+  });
+
+  // Отключаем скролл/зум жестами на всей странице для мобилы
+  document.addEventListener('touchmove', e => {
+    if (e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+}
+
+// =====================================================
 //  СТАРТ
 // =====================================================
-reset();
+createMobileControls();
+gameActive = false;
+paused = true;
+createCharacterSelect();
 requestAnimationFrame(loop);
 
 // =====================================================
@@ -4191,6 +4491,9 @@ function createCheatPanel() {
       <div class="row">
         <button id="cheatKillAll" style="flex:1;">⚔ Убить всех врагов</button>
       </div>
+      <div class="row">
+        <button id="cheatChangeChar" style="flex:1;">👤 Сменить персонажа</button>
+      </div>
     </div>
 
     <div class="info">Повышение уровня открывает карточки<br>и выбор оружия по стандартным правилам</div>
@@ -4284,6 +4587,12 @@ function createCheatPanel() {
       e.hp = 0;
       killEnemy(e, i);
     }
+  };
+  document.getElementById('cheatChangeChar').onclick = () => {
+    // Убираем существующий оверлей, если он ещё висит
+    const old = document.getElementById('charSelect');
+    if (old) old.remove();
+    createCharacterSelect();
   };
 }
 
