@@ -303,6 +303,57 @@ attackArcWide.position.y = 0.06;
 scene.add(attackArcWide);
 
 // =====================================================
+//  ДВОЙНОЙ СЕКТОР ДЛЯ ШИШКУНА (два узких «крыла»)
+// =====================================================
+const SHISHKUN_SECTOR_OFFSET = 0.3925; // 22.5° — половина от 45° между центрами
+const SHISHKUN_SECTOR_HALF = 0.55;      // полураствор каждого сектора
+
+const attackArcShishGeo = new THREE.CircleGeometry(
+  1, 24, -SHISHKUN_SECTOR_HALF, SHISHKUN_SECTOR_HALF * 2
+);
+const attackArcShishMat = new THREE.MeshBasicMaterial({
+  color: 0xffaa44, transparent: true, opacity: 0,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const attackArcShishA = new THREE.Mesh(attackArcShishGeo, attackArcShishMat);
+attackArcShishA.rotation.x = -Math.PI / 2;
+attackArcShishA.position.y = 0.06;
+scene.add(attackArcShishA);
+
+const attackArcShishB = new THREE.Mesh(attackArcShishGeo, attackArcShishMat);
+attackArcShishB.rotation.x = -Math.PI / 2;
+attackArcShishB.position.y = 0.06;
+scene.add(attackArcShishB);
+
+// =====================================================
+//  ПРИЦЕЛ ДЛЯ НАПРАВЛЕННОГО ОРУЖИЯ (линейка, дробовик)
+// =====================================================
+const aimLineGroup = new THREE.Group();
+aimLineGroup.position.y = 0.09;
+scene.add(aimLineGroup);
+
+const aimLineMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 0.16),
+  new THREE.MeshBasicMaterial({
+    color: 0xffee66, transparent: true, opacity: 0.55,
+    side: THREE.DoubleSide, depthWrite: false,
+  })
+);
+aimLineMesh.rotation.x = -Math.PI / 2;
+aimLineGroup.add(aimLineMesh);
+
+// Кончик-стрелка на дальнем конце
+const aimTipMesh = new THREE.Mesh(
+  new THREE.CircleGeometry(0.32, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0xffdd44, transparent: true, opacity: 0.7,
+    side: THREE.DoubleSide, depthWrite: false,
+  })
+);
+aimTipMesh.rotation.x = -Math.PI / 2;
+aimLineGroup.add(aimTipMesh);
+
+// =====================================================
 //  ПРЫЖОК
 // =====================================================
 const JUMP_DURATION = 0.55;
@@ -393,6 +444,52 @@ let kolobokBerserkTimer = 0;
 let kolobokBerserkCooldown = 0;
 
 // =====================================================
+//  ГАЗЫ ГРИФОНИ (Q)
+// =====================================================
+const GAS_DURATION = 5.0;            // сек
+const GAS_COOLDOWN = 20.0;           // сек
+const GAS_UNLOCK_LEVEL = 5;
+const GAS_RADIUS = 6.0;              // радиус торнадо
+const GAS_DPS_FROM_HP = 0.4;         // урон в секунду = maxHp × 0.4
+const GAS_PULL_SPEED = 9;            // скорость притяжения к центру
+const GAS_SPIN_SPEED = 5.5;          // радиан в секунду (вращение вокруг центра)
+const GAS_MIN_DISTANCE = 0.6;        // ближе этого не притягивает
+
+let gasActive = false;
+let gasTimer = 0;
+let gasCooldown = 0;
+let gasCenterX = 0;
+let gasCenterZ = 0;
+
+// =====================================================
+//  ЛУКСМАКСИНГ ШИШКУНА (Q)
+// =====================================================
+const LUCK_UNLOCK_LEVEL = 5;
+const LUCK_CUTSCENE_DURATION = 3.6;   // сек — вся катсцена
+const LUCK_DRIVING_DURATION = 5.0;    // сек — режим езды
+const LUCK_COOLDOWN = 20.0;           // сек — откат
+const LUCK_EXPLOSION_RADIUS = 12;
+const LUCK_EXPLOSION_DMG_MULT = 10;   // × maxHp
+const LUCK_CAR_SPEED_MULT = 1.8;      // × скорость героя во время езды
+const LUCK_RAM_RADIUS = 2.2;
+const LUCK_RAM_DPS_MULT = 0.7;        // × maxHp в секунду
+
+let lucksMaxingActive = false;
+let lucksMaxingCooldown = 0;
+let lucksMaxingPhase = 'none';   // 'cutscene' | 'driving' | 'none'
+let lucksMaxingTimer = 0;
+let lucksMaxingExploded = false;
+let enemiesFrozen = false;
+
+let carMesh = null;
+const carStart = new THREE.Vector3();
+const carEnd = new THREE.Vector3();
+const cinStartPos = new THREE.Vector3();
+const cinStartLook = new THREE.Vector3();
+const cinEndPos = new THREE.Vector3();
+const cinEndLook = new THREE.Vector3();
+
+// =====================================================
 //  УЧИТЕЛЯ — константы
 // =====================================================
 const TEACHER_HP_MULT    = 3.0;   // в 3 раза сильнее (HP)
@@ -445,6 +542,10 @@ const hero = {
   jumpCooldown: 0,
   height: 0,
 };
+// Угол прицела (мышь / джойстик / тап).
+// Используется для направленного оружия: линейка, дробовик.
+// НЕ влияет на обычный удар рюкзаком — тот бьёт по ближайшему врагу.
+let playerAimAngle = 0;
 
 const enemies = [];
 const particles = [];
@@ -540,6 +641,20 @@ const WEAPONS = [
     cooldown:   [3000, 3000, 3000, 3000, 3000],
     halfAngle:  [0.35, 0.45, 0.55, 0.68, 0.85],  // полураствор конуса (радианы)
   },
+  {
+    id: 'perfume',
+    name: 'Мамины духи',
+    ico: '💨',
+    desc: 'Раз в 6 сек распыляет вокруг героя облако. Враги в нём замедляются и бьют слабее. Со 2 ур. — ещё и получают урон.',
+    color: 0xd966c8,
+    maxLevel: 5,
+    radius:   15,                                 // 3 клетки (клетка = 5 юнитов)
+    cooldown: [8000, 7000, 6000, 5000, 4000],     // 6 сек → 2 сек
+    slow:     [0.50, 0.55, 0.62, 0.70, 0.80],     // 50% → 80%
+    weaken:   [0.50, 0.55, 0.62, 0.70, 0.80],     // 50% → 80%
+    dps:      [0,    10,   15,   20,  25],      // урон в секунду (с ур. 2)
+    duration: 4.0,                                 // время жизни облака
+  },
 ];
 
 // =====================================================
@@ -557,6 +672,7 @@ const weaponDamageFlat = {
   ruler: 0,
   slingshot: 0,
   shotgun: 0,
+  perfume: 0,
 };
 
 const equippedWeapons = {};
@@ -568,7 +684,11 @@ const weaponTimers = {
   slingshot: 0,
   hammer: 0,
   shotgun: 0,
+  perfume: 0,
 };
+
+// Активные облака духов
+const perfumeClouds = [];
 
 // =====================================================
 //  СОСТОЯНИЕ ПРЕВРАЩЕНИЯ (от молота)
@@ -820,6 +940,49 @@ function rebuildWeaponMeshes() {
     heroGroup.add(g);
     weaponMeshes.shotgun = g;
   }
+
+  if (equippedWeapons.perfume) {
+    const g = new THREE.Group();
+
+    // Стеклянный флакон
+    const bottle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.42, 0.18),
+      new THREE.MeshLambertMaterial({
+        color: 0xffccdd, transparent: true, opacity: 0.75,
+      })
+    );
+    bottle.position.y = -0.05;
+    bottle.castShadow = true;
+    g.add(bottle);
+
+    // Крышка
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 0.12, 8),
+      new THREE.MeshLambertMaterial({ color: 0xd4af37 })
+    );
+    cap.position.y = 0.24;
+    g.add(cap);
+
+    // Распылитель
+    const nozzle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 8, 6),
+      new THREE.MeshLambertMaterial({ color: 0xcccccc })
+    );
+    nozzle.position.y = 0.32;
+    g.add(nozzle);
+
+    // Розовая жидкость внутри
+    const liquid = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.22, 0.14),
+      new THREE.MeshBasicMaterial({ color: 0xff66bb })
+    );
+    liquid.position.y = -0.1;
+    g.add(liquid);
+
+    g.position.set(-1.05, 1.7, 0.35);
+    heroGroup.add(g);
+    weaponMeshes.perfume = g;
+  }
 }
 
 // =====================================================
@@ -928,7 +1091,7 @@ function useWeapons(dt) {
       const range = weaponStat('ruler', 'range');
       const def = WEAPONS.find(w => w.id === 'ruler');
       const speed = def.projectileSpeed;
-      const angle = hero.attackAngle;
+      const angle = playerAimAngle;
 
       // Создаём меш бумеранга
       const mesh = new THREE.Group();
@@ -1025,7 +1188,7 @@ function useWeapons(dt) {
       const dmg = weaponStat('shotgun', 'damage');
       const range = weaponStat('shotgun', 'range');
       const halfAngle = weaponStat('shotgun', 'halfAngle');
-      const angle = hero.attackAngle;
+      const angle = playerAimAngle;
 
       let hitAny = false;
 
@@ -1079,12 +1242,115 @@ function useWeapons(dt) {
           hitAny = true;
         }
       }
+    }    
+  }
+  // =====================================================
+  //  МАМИНЫ ДУХИ — облако вокруг героя
+  // =====================================================
+  if (equippedWeapons.perfume) {
+    weaponTimers.perfume -= dt * 1000;
+    if (weaponTimers.perfume <= 0) {
+      const cd = weaponStat('perfume', 'cooldown');
+      weaponTimers.perfume = cd;
 
-      // Визуальный эффект — всегда, даже если никого не задело
-      spawnShotgunEffect(hero.x, hero.z, angle, range, halfAngle);
+      const def = WEAPONS.find(w => w.id === 'perfume');
+      const lvl = weaponLevel('perfume') - 1;
 
-      // Отдача — небольшой сдвиг камеры
-      cameraShake(0.18);
+      const radius    = def.radius;
+      const slow      = def.slow[lvl];
+      const weaken    = def.weaken[lvl];
+      let   dps       = def.dps[lvl];
+
+      // Плоский бонус от карточек добавляется к dps
+      if (dps > 0) {
+        dps += (weaponDamageFlat.perfume || 0);
+        dps *= (1 + (level - 1) * 0.08);
+      }
+
+      const duration  = def.duration;
+
+      // Меш облака
+      const cloudGroup = new THREE.Group();
+      const cloudX = hero.x;
+      const cloudZ = hero.z;
+      cloudGroup.position.set(cloudX, 0, cloudZ);
+
+      // Полупрозрачная сфера — основное тело облака
+      const cloudMat = new THREE.MeshBasicMaterial({
+        color: 0xff88cc,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const cloudSphere = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.95, 24, 18), cloudMat);
+      cloudSphere.position.y = 2.5;
+      cloudGroup.add(cloudSphere);
+
+      // Кольцо на земле
+      const cloudRing = new THREE.Mesh(
+        new THREE.RingGeometry(radius - 0.5, radius, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0xff66bb, transparent: true, opacity: 0.55,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      cloudRing.rotation.x = -Math.PI / 2;
+      cloudRing.position.y = 0.12;
+      cloudGroup.add(cloudRing);
+
+      // Внутреннее кольцо
+      const cloudRing2 = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 0.5, radius * 0.55, 40),
+        new THREE.MeshBasicMaterial({
+          color: 0xffaaee, transparent: true, opacity: 0.35,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      cloudRing2.rotation.x = -Math.PI / 2;
+      cloudRing2.position.y = 0.13;
+      cloudGroup.add(cloudRing2);
+
+      // Плавающие частицы — «пузырьки» духов
+      const cloudParticles = [];
+      for (let i = 0; i < 18; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.random() * radius * 0.9;
+        const pMat = new THREE.MeshBasicMaterial({
+          color: 0xffccdd, transparent: true, opacity: 0.7,
+          depthWrite: false,
+        });
+        const p = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), pMat);
+        p.position.set(Math.cos(a) * r, 0.5 + Math.random() * 3.5, Math.sin(a) * r);
+        p.userData = {
+          baseY: p.position.y,
+          phase: Math.random() * Math.PI * 2,
+          radius: r,
+          angle: a,
+        };
+        cloudGroup.add(p);
+        cloudParticles.push(p);
+      }
+
+      scene.add(cloudGroup);
+
+      perfumeClouds.push({
+        x: cloudX,
+        z: cloudZ,
+        radius,
+        slow,
+        weaken,
+        dps,
+        timer: duration,
+        mesh: cloudGroup,
+        sphere: cloudSphere,
+        sphereMat: cloudMat,
+        particles: cloudParticles,
+      });
+
+      // Вспышка при появлении
+      burst(cloudX, cloudZ, 0xff88cc);
+      burst(cloudX, cloudZ, 0xffccdd);
     }
   }
 
@@ -1340,6 +1606,109 @@ function useWeapons(dt) {
   } else {
     if (weaponMeshes.pen) weaponMeshes.pen.rotation.y *= 0.8;
     if (weaponMeshes.ruler) weaponMeshes.ruler.rotation.y *= 0.8;
+  }
+
+  // ---- Обновление активных облаков духов ----
+  updatePerfumeClouds(dt);
+}
+
+// =====================================================
+//  ОБЛАКА ДУХОВ — движение по времени, эффекты на врагов
+// =====================================================
+function updatePerfumeClouds(dt) {
+  // Сброс эффектов на всех врагах.
+  // Если враг в этот кадр не попадёт ни в одно облако — флаги останутся 0.
+  for (const e of enemies) {
+    e._perfumeSlow = 0;
+    e._perfumeWeaken = 0;
+  }
+
+  for (let i = perfumeClouds.length - 1; i >= 0; i--) {
+    const c = perfumeClouds[i];
+    c.timer -= dt;
+
+    // Затухание облака к концу времени жизни
+    const lifeRatio = Math.max(0, c.timer / 4);
+    c.sphereMat.opacity = 0.06 + lifeRatio * 0.14;
+
+    // Анимация кольца
+    if (c.mesh.children[1]) {
+      const ring = c.mesh.children[1];
+      ring.rotation.z += dt * 0.6;
+    }
+    if (c.mesh.children[2]) {
+      const ring2 = c.mesh.children[2];
+      ring2.rotation.z -= dt * 0.9;
+    }
+
+    // Анимация частиц — лёгкое вращение и вертикальная пульсация
+    const t = performance.now() * 0.001;
+    for (const p of c.particles) {
+      p.userData.angle += dt * 0.25;
+      const r = p.userData.radius;
+      p.position.x = Math.cos(p.userData.angle) * r;
+      p.position.z = Math.sin(p.userData.angle) * r;
+      p.position.y = p.userData.baseY + Math.sin(t * 2 + p.userData.phase) * 0.3;
+    }
+
+    // ---- Эффекты на врагов внутри облака ----
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      if (e.dying || e.flyingToBoss) continue;
+
+      const dx = e.x - c.x;
+      const dz = e.z - c.z;
+      const d = Math.hypot(dx, dz);
+
+      if (d < c.radius + e.r) {
+        // Максимум эффектов, если враг в нескольких облаках
+        if (c.slow > e._perfumeSlow) e._perfumeSlow = c.slow;
+        if (c.weaken > e._perfumeWeaken) e._perfumeWeaken = c.weaken;
+
+        // Урон со 2-го уровня
+        if (c.dps > 0) {
+          e.hp -= c.dps * dt;
+          if (Math.random() < 0.12) burst(e.x, e.z, 0xff88cc);
+          if (e.hp <= 0) {
+            killEnemy(e, j);
+            continue;
+          }
+        }
+      }
+    }
+
+    // Урон боссу
+    if (boss.active && c.dps > 0) {
+      const dx = boss.x - c.x;
+      const dz = boss.z - c.z;
+      const d = Math.hypot(dx, dz);
+      if (d < c.radius + boss.r) {
+        damageBoss(c.dps * dt * 0.7);
+      }
+    }
+
+    // Статуи (только урон, без замедления — они статичны)
+    if (c.dps > 0) {
+      for (let k = statues.length - 1; k >= 0; k--) {
+        const s = statues[k];
+        const dx = s.x - c.x;
+        const dz = s.z - c.z;
+        const d = Math.hypot(dx, dz);
+        if (d < c.radius + s.r) {
+          damageStatue(s, k, c.dps * dt * 0.7);
+        }
+      }
+    }
+
+    // Убираем облако когда время вышло
+    if (c.timer <= 0) {
+      scene.remove(c.mesh);
+      c.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      perfumeClouds.splice(i, 1);
+    }
   }
 }
 
@@ -1940,6 +2309,9 @@ function updateBossHud() {
 function updateBoss(dt) {
   if (!boss.active) return;
 
+  // Заморозка во время катсцены Луксмаксинга
+  if (enemiesFrozen) return;
+
   boss.timeLeft -= dt;
   updateBossHud();
 
@@ -2468,7 +2840,15 @@ addEventListener('keydown', e => {
   }
 
   if (c === 'KeyQ') {
-    if (gameActive && !paused) tryActivateKolobokBerserk();
+    if (gameActive && !paused) {
+      if (currentCharacter && currentCharacter.isRoller) {
+        tryActivateKolobokBerserk();
+      } else if (currentCharacter && currentCharacter.doubleSector) {
+        tryActivateLucksMaxing();
+      } else {
+        tryActivateGrifonyaGas();
+      }
+    }
   }
 });
 
@@ -3204,6 +3584,25 @@ function resolveHouseCollision(px, pz, r) {
   return { x: px, z: pz };
 }
 
+
+// Проверка попадания в «зону атаки» текущего персонажа.
+// Для Шишкуна — два сектора ±22.5° от направления прицела.
+function isInAttackSector(angleToTarget, aimAngle) {
+  if (currentCharacter && currentCharacter.doubleSector) {
+    for (const o of [-SHISHKUN_SECTOR_OFFSET, SHISHKUN_SECTOR_OFFSET]) {
+      let diff = Math.abs(angleToTarget - (aimAngle + o));
+      diff = Math.min(diff, Math.PI * 2 - diff);
+      if (diff <= SHISHKUN_SECTOR_HALF) return true;
+    }
+    return false;
+  }
+  const isRoller = currentCharacter && currentCharacter.isRoller;
+  const half = isRoller ? 1.4 : 1.15;
+  let diff = Math.abs(angleToTarget - aimAngle);
+  diff = Math.min(diff, Math.PI * 2 - diff);
+  return diff <= half;
+}
+
 // =====================================================
 //  УДАР РЮКЗАКОМ
 // =====================================================
@@ -3211,6 +3610,9 @@ let lastAttack = 0;
 let lastJumpAttack = 0;
 
 function doAttack() {
+  // Во время катсцены / езды Луксмаксинга обычная атака недоступна
+  if (lucksMaxingActive) return;
+
   const now = performance.now();
   const isJumpAttack = hero.isJumping && hero.height > 0.3;
 
@@ -3326,9 +3728,6 @@ function doAttack() {
     }
   }
 
-    // Полураствор сектора — у Колобка шире
-  const attackHalfAngle = (currentCharacter && currentCharacter.isRoller) ? 1.4 : 1.15;
-
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
     if (e.dying || e.flyingToBoss) continue;
@@ -3338,9 +3737,7 @@ function doAttack() {
     const dist = Math.hypot(dx, dz);
     if (dist > stats.radius + e.r) continue;
 
-    let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
-    diff = Math.min(diff, Math.PI * 2 - diff);
-    if (diff > attackHalfAngle) continue;
+    if (!isInAttackSector(Math.atan2(dz, dx), hero.attackAngle)) continue;
 
     e.hp -= baseDamage;
     const kb = 12;
@@ -3355,9 +3752,9 @@ function doAttack() {
     const dz = boss.z - hero.z;
     const dist = Math.hypot(dx, dz);
     if (dist < stats.radius + boss.r) {
-      let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
-      diff = Math.min(diff, Math.PI * 2 - diff);
-        if (diff <= attackHalfAngle) damageBoss(baseDamage);
+      if (isInAttackSector(Math.atan2(dz, dx), hero.attackAngle)) {
+        damageBoss(baseDamage);
+      }
     }
   }
 
@@ -3367,9 +3764,9 @@ function doAttack() {
     const dz = s.z - hero.z;
     const dist = Math.hypot(dx, dz);
     if (dist > stats.radius + s.r) continue;
-    let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
-    diff = Math.min(diff, Math.PI * 2 - diff);
-      if (diff <= attackHalfAngle) damageStatue(s, i, baseDamage);
+    if (isInAttackSector(Math.atan2(dz, dx), hero.attackAngle)) {
+      damageStatue(s, i, baseDamage);
+    }
   }
 }
 
@@ -4071,6 +4468,691 @@ function updateHammerBuffBar() {
   }
 }
 
+// =====================================================
+//  ГАЗЫ — активация и апдейт
+// =====================================================
+function tryActivateGrifonyaGas() {
+  // Только для Грифони
+  if (!currentCharacter || currentCharacter.isRoller || currentCharacter.doubleSector) return;
+  if (level < GAS_UNLOCK_LEVEL) return;
+  if (gasActive) return;
+  if (gasCooldown > 0) return;
+  if (!gameActive || paused) return;
+
+  gasActive = true;
+  gasTimer = GAS_DURATION;
+  gasCenterX = hero.x;
+  gasCenterZ = hero.z;
+
+  gasTornadoGroup.visible = true;
+  gasTornadoGroup.position.set(gasCenterX, 0, gasCenterZ);
+
+  // Вспышка при активации
+  burst(gasCenterX, gasCenterZ, 0x66ff44);
+  burst(gasCenterX, gasCenterZ, 0x88ffaa);
+  cameraShake(0.12);
+}
+
+function updateGrifonyaGas(dt) {
+  // Откат
+  if (gasCooldown > 0) {
+    gasCooldown -= dt;
+    if (gasCooldown < 0) gasCooldown = 0;
+  }
+
+  if (!gasActive) {
+    if (gasTornadoGroup.visible) gasTornadoGroup.visible = false;
+    return;
+  }
+
+  // Длительность
+  gasTimer -= dt;
+  if (gasTimer <= 0) {
+    gasActive = false;
+    gasTimer = 0;
+    gasCooldown = GAS_COOLDOWN;
+    gasTornadoGroup.visible = false;
+    // Снимаем метку со всех врагов — иначе они останутся «в газе» навсегда
+    for (const e of enemies) e.inGas = false;
+    burst(gasCenterX, gasCenterZ, 0x66ff44);
+    return;
+  }
+
+  // ---- Анимация ----
+  const t = performance.now() * 0.001;
+  for (let i = 0; i < gasRings.length; i++) {
+    const r = gasRings[i];
+    // Пульс радиуса
+    const pulse = 1 + Math.sin(t * 3 + r.phase) * 0.08;
+    r.mesh.scale.set(pulse, pulse, 1);
+    // Вращение колец (противоположные направления для эффекта)
+    r.mesh.rotation.z += dt * (1.2 + i * 0.4) * (i % 2 === 0 ? 1 : -1);
+    // Лёгкое покачивание по высоте
+    r.mesh.position.y = r.y + Math.sin(t * 2.5 + r.phase) * 0.2;
+  }
+  gasCoreMat.opacity = 0.18 + Math.sin(t * 2) * 0.06;
+  gasBeamMat.opacity = 0.12 + Math.sin(t * 1.5) * 0.04;
+
+  // ---- Движение торнадо к ближайшему врагу ----
+  // Ищем ближайшую цель (враг или босс)
+  let targetX = null, targetZ = null, bestDist = Infinity;
+
+  for (const e of enemies) {
+    if (e.dying || e.flyingToBoss) continue;
+    const dx = e.x - gasCenterX;
+    const dz = e.z - gasCenterZ;
+    const d = Math.hypot(dx, dz);
+    if (d < bestDist) {
+      bestDist = d;
+      targetX = e.x;
+      targetZ = e.z;
+    }
+  }
+  if (boss.active) {
+    const dx = boss.x - gasCenterX;
+    const dz = boss.z - gasCenterZ;
+    const d = Math.hypot(dx, dz);
+    if (d < bestDist) {
+      bestDist = d;
+      targetX = boss.x;
+      targetZ = boss.z;
+    }
+  }
+
+  // Двигаемся к цели со скоростью Грифони
+  if (targetX !== null && bestDist > 0.5) {
+    const dx = targetX - gasCenterX;
+    const dz = targetZ - gasCenterZ;
+    const d = Math.hypot(dx, dz) || 1;
+    // Скорость торнадо = скорость героя (с учётом баффа молота)
+    const speedMul = heroTransformTimer > 0 ? heroTransformSpeedMult : 1;
+    const tornadoSpeed = stats.speed * speedMul;
+    const step = tornadoSpeed * dt;
+    // Не перескакиваем цель
+    const moveDist = Math.min(step, d - 0.3);
+    if (moveDist > 0) {
+      gasCenterX += (dx / d) * moveDist;
+      gasCenterZ += (dz / d) * moveDist;
+    }
+  }
+
+  // Обновляем позицию визуала
+  gasTornadoGroup.position.set(gasCenterX, 0, gasCenterZ);
+
+
+  // ---- Урон и стягивание врагов ----
+  const dps = stats.maxHp * GAS_DPS_FROM_HP;
+
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.dying || e.flyingToBoss) continue;
+
+    const dx = e.x - gasCenterX;
+    const dz = e.z - gasCenterZ;
+    const d = Math.hypot(dx, dz);
+
+    if (d < GAS_RADIUS) {
+      // Метка: враг внутри торнадо — блокируем его урон игроку
+      e.inGas = true;
+
+      // --- Физика стягивания и кручения ---
+      // Нормализованный вектор от центра к врагу
+      const nx = d > 0.0001 ? dx / d : 1;
+      const nz = d > 0.0001 ? dz / d : 0;
+
+      // Радиальное притяжение (если враг далеко от центра)
+      let moveX = 0, moveZ = 0;
+      if (d > GAS_MIN_DISTANCE) {
+        moveX -= nx * GAS_PULL_SPEED * dt;
+        moveZ -= nz * GAS_PULL_SPEED * dt;
+      }
+
+      // Тангенциальное вращение вокруг центра
+      const tx = -nz;
+      const tz = nx;
+      const spinSpeed = GAS_SPIN_SPEED * (0.5 + (GAS_RADIUS - d) / GAS_RADIUS);
+      moveX += tx * spinSpeed * dt * Math.min(d, GAS_RADIUS);
+      moveZ += tz * spinSpeed * dt * Math.min(d, GAS_RADIUS);
+
+      e.x += moveX;
+      e.z += moveZ;
+
+      // Обнуляем обычный отброс, чтобы врага не выбивало из торнадо
+      e.kbX *= 0.6;
+      e.kbZ *= 0.6;
+
+      // --- Урон ---
+      e.hp -= dps * dt;
+      if (Math.random() < 0.15) burst(e.x, e.z, 0x66ff44);
+      if (e.hp <= 0) killEnemy(e, i);
+    } else {
+      // Снаружи — снимаем метку
+      e.inGas = false;
+    }
+  }
+
+  // ---- Урон боссу и статуям ----
+  if (boss.active) {
+    const dx = boss.x - gasCenterX;
+    const dz = boss.z - gasCenterZ;
+    const d = Math.hypot(dx, dz);
+    if (d < GAS_RADIUS + boss.r) {
+      damageBoss(stats.maxHp * GAS_DPS_FROM_HP * dt * 0.7);
+    }
+  }
+
+  for (let i = statues.length - 1; i >= 0; i--) {
+    const s = statues[i];
+    const dx = s.x - gasCenterX;
+    const dz = s.z - gasCenterZ;
+    const d = Math.hypot(dx, dz);
+    if (d < GAS_RADIUS + s.r) {
+      damageStatue(s, i, stats.maxHp * GAS_DPS_FROM_HP * dt * 0.7);
+    }
+  }
+}
+
+// ---------- HUD для газов ----------
+const gasHudEl = (function createGasHud() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #gasHud {
+      position: fixed;
+      bottom: 190px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 40, 25, 0.85);
+      border: 3px solid #66ff44;
+      border-radius: 20px;
+      padding: 8px 22px;
+      color: #ccffbb;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      font-size: 16px;
+      z-index: 60;
+      display: none;
+      letter-spacing: 1px;
+      box-shadow: 0 0 20px rgba(102, 255, 68, 0.45);
+      text-shadow: 2px 2px 0 #000;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #gasHud.ready { animation: gasPulse 1.2s ease-in-out infinite; }
+    #gasHud.active {
+      background: rgba(30, 70, 20, 0.92);
+      color: #eeffee;
+      border-color: #88ff66;
+      animation: none;
+      box-shadow: 0 0 35px rgba(120, 255, 80, 0.95);
+    }
+    @keyframes gasPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(102, 255, 68, 0.45); }
+      50%      { box-shadow: 0 0 35px rgba(120, 255, 80, 0.95); }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'gasHud';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastGasHudText = '';
+function updateGasHud() {
+  const isRoller = currentCharacter && currentCharacter.isRoller;
+  const isShishkun = currentCharacter && currentCharacter.doubleSector;
+  if (isRoller || isShishkun || level < GAS_UNLOCK_LEVEL) {
+    if (gasHudEl.style.display !== 'none') {
+      gasHudEl.style.display = 'none';
+      _lastGasHudText = '';
+    }
+    return;
+  }
+
+  let text, cls;
+  if (gasActive) {
+    text = `☣ ГАЗЫ! ${gasTimer.toFixed(1)}с`;
+    cls = 'active';
+  } else if (gasCooldown > 0) {
+    text = `☣ Газы: ${gasCooldown.toFixed(1)}с`;
+    cls = '';
+  } else {
+    text = `☣ Q — ГАЗЫ ГОТОВЫ`;
+    cls = 'ready';
+  }
+
+  if (text !== _lastGasHudText || gasHudEl.className !== cls) {
+    gasHudEl.textContent = text;
+    gasHudEl.className = cls;
+    gasHudEl.style.display = 'block';
+    _lastGasHudText = text;
+  }
+}
+
+// =====================================================
+//  ЛУКСМАКСИНГ — модель машины
+// =====================================================
+function createLucksCarMesh() {
+  // Внешняя группа — её position и rotation.y меняет игра.
+  // Внутренняя — скомпенсированный разворот, чтобы «нос» модели
+  // смотрел в +Z (как у всех персонажей).
+  const g = new THREE.Group();
+  const inner = new THREE.Group();
+  inner.rotation.y = Math.PI / 2;
+  g.add(inner);
+  // Внутри inner всё, что раньше добавлялось в g.
+  // Псевдоним, чтобы не переписывать все .add ниже:
+  const attach = inner;
+
+  const bodyMat  = new THREE.MeshLambertMaterial({ color: 0x8a1a2a });
+  const trimMat  = new THREE.MeshLambertMaterial({ color: 0xffd966 });
+  const glassMat = new THREE.MeshLambertMaterial({
+    color: 0x88ddff, emissive: 0x224466, transparent: true, opacity: 0.75,
+  });
+  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const rimMat   = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+
+  // Нижняя часть — «кузов»
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.9, 1.8), bodyMat);
+  body.position.y = 0.9;
+  body.castShadow = true;
+  inner.add(body);
+
+  // Верх — «кабина» чуть выше
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.85, 1.7), bodyMat);
+  cabin.position.set(0.1, 1.75, 0);
+  cabin.castShadow = true;
+  inner.add(cabin);
+
+  // Заднее стекло
+  const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
+  rearGlass.position.set(1.12, 1.8, 0);
+  inner.add(rearGlass);
+
+  // Лобовое стекло
+  const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
+  frontGlass.position.set(-0.92, 1.8, 0);
+  inner.add(frontGlass);
+
+  // Полоска-хром по низу
+  const chrome = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.08, 1.82), trimMat);
+  chrome.position.y = 0.5;
+  inner.add(chrome);
+
+  // Полоска-хром по верху
+  const chromeTop = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.06, 1.82), trimMat);
+  chromeTop.position.y = 1.32;
+  inner.add(chromeTop);
+
+  // Колёса + диски
+  const wheelPositions = [
+    [1.3, 0.42, 0.92], [-1.3, 0.42, 0.92],
+    [1.3, 0.42, -0.92], [-1.3, 0.42, -0.92],
+  ];
+  for (const [x, y, z] of wheelPositions) {
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.32, 16), wheelMat);
+    w.rotation.x = Math.PI / 2;
+    w.position.set(x, y, z);
+    w.castShadow = true;
+    inner.add(w);
+    // Диск
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.34, 12), rimMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.set(x, y, z);
+    inner.add(rim);
+  }
+
+  // Фары
+  const hlMat = new THREE.MeshBasicMaterial({ color: 0xffee88 });
+  const hl1 = new THREE.Mesh(new THREE.CircleGeometry(0.22, 12), hlMat);
+  hl1.position.set(-2.01, 0.95, 0.55);
+  hl1.rotation.y = -Math.PI / 2;
+  inner.add(hl1);
+  const hl2 = hl1.clone();
+  hl2.position.z = -0.55;
+  inner.add(hl2);
+
+  // Задние стопы
+  const tlMat = new THREE.MeshBasicMaterial({ color: 0xff3020 });
+  const tl1 = new THREE.Mesh(new THREE.CircleGeometry(0.16, 12), tlMat);
+  tl1.position.set(2.01, 0.95, 0.55);
+  tl1.rotation.y = Math.PI / 2;
+  inner.add(tl1);
+  const tl2 = tl1.clone();
+  tl2.position.z = -0.55;
+  inner.add(tl2);
+
+  return g;
+}
+
+// =====================================================
+//  ЛУКСМАКСИНГ — активация
+// =====================================================
+function tryActivateLucksMaxing() {
+  if (!currentCharacter || !currentCharacter.doubleSector) return;
+  if (level < LUCK_UNLOCK_LEVEL) return;
+  if (lucksMaxingActive) return;
+  if (lucksMaxingCooldown > 0) return;
+  if (!gameActive || paused) return;
+
+  lucksMaxingActive = true;
+  lucksMaxingPhase = 'cutscene';
+  lucksMaxingTimer = 0;
+  lucksMaxingExploded = false;
+  enemiesFrozen = true;
+
+  // Сохраняем текущую позицию камеры и её цель
+  cinStartPos.copy(camera.position);
+  cinStartLook.set(hero.x, 1.5 + hero.height * 0.4, hero.z);
+
+  // Финальная позиция камеры — сбоку от Шишкуна, чуть выше
+  const heroAngle = heroGroup.rotation.y;
+  const camSide = heroAngle + Math.PI * 0.5;
+  cinEndPos.set(
+    hero.x + Math.sin(camSide) * 6.5,
+    3.4,
+    hero.z + Math.cos(camSide) * 6.5
+  );
+  cinEndLook.set(hero.x, 1.4, hero.z);
+
+  // Машина подъезжает спереди-слева, останавливается рядом с Шишкуном
+  const approachAngle = heroAngle - Math.PI * 0.65;
+  const approachDist = 24;
+  carStart.set(
+    hero.x + Math.sin(approachAngle) * approachDist,
+    0,
+    hero.z + Math.cos(approachAngle) * approachDist
+  );
+  const parkSide = heroAngle + Math.PI * 0.5;
+  carEnd.set(
+    hero.x + Math.sin(parkSide) * 2.4,
+    0,
+    hero.z + Math.cos(parkSide) * 2.4
+  );
+
+  // Создаём машину
+  carMesh = createLucksCarMesh();
+  carMesh.position.copy(carStart);
+  // Развернуть машину носом к точке парковки
+  const dx = carEnd.x - carStart.x;
+  const dz = carEnd.z - carStart.z;
+  carMesh.rotation.y = Math.atan2(dx, dz);
+  scene.add(carMesh);
+
+  burst(hero.x, hero.z, 0xffd966);
+}
+
+// =====================================================
+//  ЛУКСМАКСИНГ — апдейт
+// =====================================================
+function updateLucksMaxing(dt) {
+  // Откат
+  if (lucksMaxingCooldown > 0) {
+    lucksMaxingCooldown -= dt;
+    if (lucksMaxingCooldown < 0) lucksMaxingCooldown = 0;
+  }
+
+  if (!lucksMaxingActive) return;
+
+  lucksMaxingTimer += dt;
+  const t = lucksMaxingTimer;
+
+  if (lucksMaxingPhase === 'cutscene') {
+    // =============== ФАЗА КАТСЦЕНЫ ===============
+    const ease = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+
+    // 0.0–1.2: камера спускается к Шишкуну
+    // 1.2–3.0: держим крупный план
+    // 3.0–3.6: камера возвращается
+    let camPos, camLook;
+    if (t < 1.2) {
+      const p = ease(t / 1.2);
+      camPos = new THREE.Vector3().lerpVectors(cinStartPos, cinEndPos, p);
+      camLook = new THREE.Vector3().lerpVectors(cinStartLook, cinEndLook, p);
+    } else if (t < 3.0) {
+      camPos = cinEndPos.clone();
+      camLook = cinEndLook.clone();
+    } else {
+      const p = ease((t - 3.0) / 0.6);
+      // Возвращаемся к «нормальной» позиции камеры
+      const normalPos = new THREE.Vector3(hero.x, 18, hero.z + 22);
+      const normalLook = new THREE.Vector3(hero.x, 1.5, hero.z);
+      camPos = new THREE.Vector3().lerpVectors(cinEndPos, normalPos, p);
+      camLook = new THREE.Vector3().lerpVectors(cinEndLook, normalLook, p);
+    }
+    camera.position.copy(camPos);
+    camera.lookAt(camLook);
+
+    // --- Машина подъезжает: 1.2 – 2.4 ---
+    if (carMesh) {
+      if (t < 1.2) {
+        carMesh.position.copy(carStart);
+      } else if (t < 2.4) {
+        const p = ease((t - 1.2) / 1.2);
+        carMesh.position.lerpVectors(carStart, carEnd, p);
+        // Плавное доворачивание
+        const dx = carEnd.x - carStart.x;
+        const dz = carEnd.z - carStart.z;
+        const targetRot = Math.atan2(dx, dz);
+        carMesh.rotation.y = targetRot;
+      } else {
+        carMesh.position.copy(carEnd);
+      }
+    }
+
+    // --- Шишкун садится в машину: 2.4 – 3.0 ---
+    if (t >= 2.4 && t < 3.0) {
+      const p = (t - 2.4) / 0.6;
+      // Сжимаем героя, будто он «запрыгивает» в машину
+      heroGroup.scale.setScalar(1 - p * 0.9);
+      heroGroup.position.y = hero.height + p * 0.5;
+    } else if (t >= 3.0) {
+      heroGroup.visible = false;
+      heroGroup.scale.setScalar(1);
+    }
+
+    // --- Взрыв: 3.4 ---
+    if (t >= 3.4 && !lucksMaxingExploded) {
+      lucksMaxingExploded = true;
+      explodeLucksMaxing();
+    }
+
+    // --- Конец катсцены ---
+    if (t >= LUCK_CUTSCENE_DURATION) {
+      lucksMaxingPhase = 'driving';
+      lucksMaxingTimer = 0;
+      enemiesFrozen = false;
+      heroGroup.visible = false; // герой внутри машины
+    }
+  }
+
+  if (lucksMaxingPhase === 'driving') {
+    // =============== ФАЗА ЕЗДЫ ===============
+    // Машина под героем
+    if (carMesh) {
+      carMesh.position.set(hero.x, 0, hero.z);
+      carMesh.rotation.y = heroGroup.rotation.y;
+      // Легкое покачивание кузова
+      carMesh.position.y = Math.sin(performance.now() * 0.02) * 0.05;
+    }
+
+    // Урон при наезде
+    const dps = stats.maxHp * LUCK_RAM_DPS_MULT;
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+      if (d < LUCK_RAM_RADIUS + e.r) {
+        e.hp -= dps * dt;
+        if (Math.random() < 0.25) burst(e.x, e.z, 0xffaa44);
+        if (e.hp <= 0) killEnemy(e, i);
+      }
+    }
+
+    // Конец езды
+    if (t >= LUCK_DRIVING_DURATION) {
+      lucksMaxingActive = false;
+      lucksMaxingPhase = 'none';
+      lucksMaxingCooldown = LUCK_COOLDOWN;
+      heroGroup.visible = true;
+      heroGroup.scale.setScalar(1);
+      heroGroup.position.y = hero.height;
+      if (carMesh) {
+        scene.remove(carMesh);
+        carMesh.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+        carMesh = null;
+      }
+      burst(hero.x, hero.z, 0xffd966);
+    }
+  }
+}
+
+// =====================================================
+//  ЛУКСМАКСИНГ — взрыв
+// =====================================================
+function explodeLucksMaxing() {
+  const R = LUCK_EXPLOSION_RADIUS;
+  const dmg = stats.maxHp * LUCK_EXPLOSION_DMG_MULT;
+
+  // Урон врагам
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.dying || e.flyingToBoss) continue;
+    const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+    if (d < R + e.r) {
+      e.hp -= dmg;
+      burst(e.x, e.z, 0xffaa44);
+      if (e.hp <= 0) killEnemy(e, i);
+    }
+  }
+
+  // Босс
+  if (boss.active) {
+    const d = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+    if (d < R + boss.r) damageBoss(dmg);
+  }
+
+  // Статуи
+  for (let i = statues.length - 1; i >= 0; i--) {
+    const s = statues[i];
+    const d = Math.hypot(s.x - hero.x, s.z - hero.z);
+    if (d < R + s.r) damageStatue(s, i, dmg);
+  }
+
+  // Визуал — расширяющееся кольцо
+  const ringGeo = new THREE.RingGeometry(R * 0.2, R, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffdd44, transparent: true, opacity: 1,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(hero.x, 0.15, hero.z);
+  scene.add(ring);
+
+  const start = performance.now();
+  function animRing() {
+    const t = (performance.now() - start) / 700;
+    if (t >= 1) { scene.remove(ring); return; }
+    const s = 1 + t * 0.5;
+    ring.scale.set(s, s, 1);
+    ringMat.opacity = 1 - t;
+    requestAnimationFrame(animRing);
+  }
+  animRing();
+
+  // Взрыв частиц
+  for (let i = 0; i < 6; i++) burst(hero.x, hero.z, 0xffaa44);
+  for (let i = 0; i < 4; i++) burst(hero.x, hero.z, 0xffee88);
+  burst(hero.x, hero.z, 0xff5522);
+
+  cameraShake(0.7);
+}
+
+// ---------- HUD ----------
+const luckHudEl = (function createLuckHud() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #luckHud {
+      position: fixed;
+      bottom: 240px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(40, 20, 25, 0.85);
+      border: 3px solid #ff5566;
+      border-radius: 20px;
+      padding: 8px 22px;
+      color: #ffccdd;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      font-size: 16px;
+      z-index: 60;
+      display: none;
+      letter-spacing: 1px;
+      box-shadow: 0 0 20px rgba(255, 85, 102, 0.45);
+      text-shadow: 2px 2px 0 #000;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #luckHud.ready { animation: luckPulse 1.2s ease-in-out infinite; }
+    #luckHud.active {
+      background: rgba(80, 20, 30, 0.95);
+      color: #ffddee;
+      border-color: #ff8855;
+      animation: none;
+      box-shadow: 0 0 35px rgba(255, 120, 80, 0.95);
+    }
+    @keyframes luckPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(255, 85, 102, 0.45); }
+      50%      { box-shadow: 0 0 35px rgba(255, 120, 80, 0.95); }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'luckHud';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastLuckHudText = '';
+function updateLuckHud() {
+  const isShishkun = currentCharacter && currentCharacter.doubleSector;
+  if (!isShishkun || level < LUCK_UNLOCK_LEVEL) {
+    if (luckHudEl.style.display !== 'none') {
+      luckHudEl.style.display = 'none';
+      _lastLuckHudText = '';
+    }
+    return;
+  }
+
+  let text, cls;
+  if (lucksMaxingActive) {
+    if (lucksMaxingPhase === 'cutscene') {
+      text = `🚗 ЛУКСМАКСИНГ...`;
+    } else {
+      text = `🚗 ЕЗДА! ${(LUCK_DRIVING_DURATION - lucksMaxingTimer).toFixed(1)}с`;
+    }
+    cls = 'active';
+  } else if (lucksMaxingCooldown > 0) {
+    text = `🚗 Луксмаксинг: ${lucksMaxingCooldown.toFixed(1)}с`;
+    cls = '';
+  } else {
+    text = `🚗 Q — ЛУКСМАКСИНГ`;
+    cls = 'ready';
+  }
+
+  if (text !== _lastLuckHudText || luckHudEl.className !== cls) {
+    luckHudEl.textContent = text;
+    luckHudEl.className = cls;
+    luckHudEl.style.display = 'block';
+    _lastLuckHudText = text;
+  }
+}
+
+
 let _lastKolobokHudText = '';
 function updateKolobokHud() {
   const isRoller = currentCharacter && currentCharacter.isRoller;
@@ -4242,6 +5324,11 @@ const UPGRADES = [
     desc: '+25 к урону дробовика',
     condition: () => !!equippedWeapons.shotgun,
     apply: () => { weaponDamageFlat.shotgun += 25; } },
+
+  { ico: '💨', name: 'Стойкий аромат',
+    desc: '+5 к урону облака духов',
+    condition: () => !!equippedWeapons.perfume,
+    apply: () => { weaponDamageFlat.perfume += 5; } },
 ];
 
 let jumpCooldownBonus = 0;
@@ -4605,6 +5692,17 @@ function burst(x, z, color) {
 //  ИНДИКАТОР РАДИУСА АТАКИ
 // =====================================================
 function updateAttackIndicator() {
+  // Во время езды на машине индикаторы атаки не нужны
+  if (lucksMaxingActive && lucksMaxingPhase === 'driving') {
+    attackRingMat.opacity = 0;
+    attackDiscMat.opacity = 0;
+    attackArcMat.opacity = 0;
+    attackArcWideMat.opacity = 0;
+    attackArcShishMat.opacity = 0;
+    aimLineGroup.visible = false;
+    return;
+  }
+
   const r = stats.radius;
 
   attackRing.position.x = hero.x;
@@ -4622,16 +5720,53 @@ function updateAttackIndicator() {
   attackArc.position.z = hero.z;
   attackArcWide.position.x = hero.x;
   attackArcWide.position.z = hero.z;
+  attackArcShishA.position.x = hero.x;
+  attackArcShishA.position.z = hero.z;
+  attackArcShishB.position.x = hero.x;
+  attackArcShishB.position.z = hero.z;
 
-    const isRoller = currentCharacter && currentCharacter.isRoller;
+  // ---- ПРИЦЕЛ для направленного оружия ----
+  const isRoller = currentCharacter && currentCharacter.isRoller;
+  const hasDirectional = !!(equippedWeapons.ruler || equippedWeapons.shotgun);
+  const showAim = !isRoller && hasDirectional;
 
-  // Скрываем оба сектора по умолчанию
+  if (showAim) {
+    const len = equippedWeapons.shotgun
+      ? (weaponStat('shotgun', 'range') || 11) * 0.8
+      : (equippedWeapons.ruler ? (weaponStat('ruler', 'range') || 10) * 0.8 : 6);
+
+    aimLineGroup.visible = true;
+    aimLineGroup.position.x = hero.x;
+    aimLineGroup.position.z = hero.z;
+    aimLineGroup.rotation.y = -playerAimAngle;
+
+    aimLineMesh.scale.set(len, 1, 1);
+    aimLineMesh.position.x = len * 0.5;
+
+    aimTipMesh.position.x = len;
+    aimTipMesh.position.y = 0;
+    aimTipMesh.visible = true;
+  } else {
+    aimLineGroup.visible = false;
+  }
+
+  const isShishkun = currentCharacter && currentCharacter.doubleSector;
+
+  // Скрываем все секторы по умолчанию
   attackArcMat.opacity = 0;
   attackArcWideMat.opacity = 0;
+  attackArcShishMat.opacity = 0;
 
   if (hero.attackTimer > 0) {
     const t = hero.attackTimer / 0.18;
-    if (isRoller) {
+    if (isShishkun) {
+      // Два узких сектора, разнесённых на ±22.5°
+      attackArcShishA.scale.set(r, r, r);
+      attackArcShishB.scale.set(r, r, r);
+      attackArcShishA.rotation.z = -hero.attackAngle + SHISHKUN_SECTOR_OFFSET;
+      attackArcShishB.rotation.z = -hero.attackAngle - SHISHKUN_SECTOR_OFFSET;
+      attackArcShishMat.opacity = t * 0.75;
+    } else if (isRoller) {
       attackArcWide.scale.set(r, r, r);
       attackArcWide.rotation.z = -hero.attackAngle;
       attackArcWideMat.opacity = t * 0.8;
@@ -4641,7 +5776,6 @@ function updateAttackIndicator() {
       attackArcMat.opacity = t * 0.55;
     }
   } else if (isRoller) {
-    // Прицел Колобка виден всегда
     attackArcWide.scale.set(r, r, r);
     attackArcWide.rotation.z = -hero.attackAngle;
     attackArcWideMat.opacity = 0.3;
@@ -4655,6 +5789,55 @@ function updateAttackIndicator() {
     attackRingMat.color.setHex(0xfff5a0);
   }
 }
+
+// =====================================================
+//  ВИЗУАЛ ТОРНАДО ГАЗОВ
+// =====================================================
+const gasTornadoGroup = new THREE.Group();
+gasTornadoGroup.visible = false;
+scene.add(gasTornadoGroup);
+
+// Несколько колец на разной высоте — эффект воронки
+const gasRings = [];
+for (let i = 0; i < 5; i++) {
+  const t = i / 4;                       // 0 → 1
+  const ringRadius = 0.6 + t * (GAS_RADIUS - 0.6);
+  const ringY = 0.2 + t * 4.5;           // растёт кверху
+  const geo = new THREE.RingGeometry(ringRadius - 0.35, ringRadius, 40);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x66ff44,
+    transparent: true,
+    opacity: 0.55 - t * 0.4,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(geo, mat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = ringY;
+  gasTornadoGroup.add(ring);
+  gasRings.push({ mesh: ring, baseRadius: ringRadius, y: ringY, phase: i * 1.1 });
+}
+
+// Внутренняя сфера — плотность газов
+const gasCoreMat = new THREE.MeshBasicMaterial({
+  color: 0x44dd22, transparent: true, opacity: 0.22,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const gasCore = new THREE.Mesh(new THREE.SphereGeometry(GAS_RADIUS * 0.85, 20, 14), gasCoreMat);
+gasCore.position.y = 2;
+gasTornadoGroup.add(gasCore);
+
+// Столб света вверх
+const gasBeamMat = new THREE.MeshBasicMaterial({
+  color: 0x88ff66, transparent: true, opacity: 0.15,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const gasBeam = new THREE.Mesh(
+  new THREE.CylinderGeometry(GAS_RADIUS * 0.9, GAS_RADIUS, 8, 28, 1, true),
+  gasBeamMat
+);
+gasBeam.position.y = 4;
+gasTornadoGroup.add(gasBeam);
 
 // =====================================================
 //  АУРА ЯРОСТИ КОЛОБКА
@@ -4992,14 +6175,15 @@ function loop(now) {
     updateRunTimer();
     updateJump(dt);
 
-      // Движение героя
+    // Движение героя
     let mx = 0, mz = 0;
-    if (!hammerSlamState.active) {
+    const inLuckCutscene = lucksMaxingActive && lucksMaxingPhase === 'cutscene';
+    if (!hammerSlamState.active && !inLuckCutscene) {
       if (keys.w || keys.up) mz -= 1;
       if (keys.s || keys.down) mz += 1;
       if (keys.a || keys.left) mx -= 1;
       if (keys.d || keys.right) mx += 1;
-            // Мобильный джойстик (если он создан)
+      // Мобильный джойстик (если он создан)
       if (typeof mobileInput !== 'undefined' && mobileInput) {
         mx += mobileInput.mx || 0;
         mz += mobileInput.mz || 0;
@@ -5008,7 +6192,11 @@ function loop(now) {
 
     if (mx || mz) {
       const l = Math.hypot(mx, mz);
-      const speedMul = heroTransformTimer > 0 ? heroTransformSpeedMult : 1;
+      let speedMul = heroTransformTimer > 0 ? heroTransformSpeedMult : 1;
+      // Луксмаксинг — езда на машине быстрее
+      if (lucksMaxingActive && lucksMaxingPhase === 'driving') {
+        speedMul *= LUCK_CAR_SPEED_MULT;
+      }
       const curSpeed = stats.speed * speedMul;
       const nx = hero.x + (mx / l) * curSpeed * dt;
       const nz = hero.z + (mz / l) * curSpeed * dt;
@@ -5040,9 +6228,11 @@ function loop(now) {
     hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
     hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
     heroGroup.position.set(hero.x, hero.height, hero.z);
-        // Колобок: прицел — от джойстика, тапа или мыши
+    // Прицел — от мыши/джойстика/тапа. Работает для обоих персонажей.
+    playerAimAngle = computeRollerAimAngle();
+    // Колобок использует прицел для обычной атаки
     if (currentCharacter && currentCharacter.isRoller) {
-      hero.attackAngle = computeRollerAimAngle();
+      hero.attackAngle = playerAimAngle;
     }
 
         // Анимация текущего персонажа
@@ -5078,6 +6268,10 @@ function loop(now) {
     updateHammerSlam(dt);
     updateKolobokBerserk(dt);
     updateKolobokHud();
+    updateGrifonyaGas(dt);
+    updateGasHud();
+    updateLucksMaxing(dt);
+    updateLuckHud();
     updateHammerBuffBar();
     syncDebugHitboxes();
     useWeapons(dt);
@@ -5115,6 +6309,10 @@ function loop(now) {
     // Враги
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
+
+      // Заморозка во время катсцены — враги не двигаются
+      if (enemiesFrozen) continue;
+
       e.wobble += dt * 6;
 
             // === ЛЕТЯЩАЯ СОБАКА (отброшена ударом в прыжке) ===
@@ -5178,8 +6376,11 @@ function loop(now) {
       const dx = hero.x - e.x;
       const dz = hero.z - e.z;
       const d = Math.hypot(dx, dz) || 1;
-      let nx = e.x + (dx / d) * e.speed * dt;
-      let nz = e.z + (dz / d) * e.speed * dt;
+      // Замедление от облака духов
+      const slowMul = 1 - (e._perfumeSlow || 0);
+      const effSpeed = e.speed * slowMul;
+      let nx = e.x + (dx / d) * effSpeed * dt;
+      let nz = e.z + (dz / d) * effSpeed * dt;
 
       const resolved = resolveHouseCollision(nx, nz, e.r * 0.6);
       e.x = resolved.x;
@@ -5223,8 +6424,10 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
-      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive) {
-        hp -= e.damage * dt * 4;
+      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
+        // Ослабление от облака духов
+        const weakenMul = 1 - (e._perfumeWeaken || 0);
+        hp -= e.damage * dt * 4 * weakenMul;
         if (hp <= 0 && gameActive) {
           hp = 0;
           gameActive = false;
@@ -5235,7 +6438,8 @@ function loop(now) {
       }
     }
 
-    // Спавн врагов (реже во время боя с боссом)
+    // Спавн врагов (реже во время боя с боссом, не спавним во время катсцены)
+    if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene')) {
     spawnTimer += dt;
     const spawnMultiplier = boss.active ? 2.2 : 1;
     let interval = Math.max(0.3, (1.1 - level * 0.04)) * spawnMultiplier;
@@ -5255,6 +6459,7 @@ function loop(now) {
         count = Math.max(1, Math.ceil(count * (1 - Math.min(0.5, (level - 7) * 0.05))));
       }
       for (let i = 0; i < Math.min(count, 5); i++) spawnEnemy();
+    }
     }
   }
 
@@ -5279,7 +6484,9 @@ function loop(now) {
   }
 
   updateAttackIndicator();
-  updateCamera();
+  if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene')) {
+    updateCamera();
+  }
   renderer.render(scene, camera);
   drawMinimap();
   requestAnimationFrame(loop);
@@ -5352,12 +6559,14 @@ function reset() {
   weaponDamageFlat.ruler = 0;
   weaponDamageFlat.slingshot = 0;
   weaponDamageFlat.shotgun = 0;
+  weaponDamageFlat.perfume = 0;
    // У молота нет бонусов урона — карточки усиления к нему не относятся
   weaponTimers.pen = 0;
   weaponTimers.ruler = 0;
   weaponTimers.slingshot = 0;
   weaponTimers.hammer = 0;
   weaponTimers.shotgun = 0;
+  weaponTimers.perfume = 0;
   heroTransformTimer = 0;
   heroTransformMaxDuration = 1;
   heroTransformDamageMult = 1.0;
@@ -5380,6 +6589,31 @@ function reset() {
   kolobokBerserkCooldown = 0;
   kolobokAuraGroup.visible = false;
   _lastKolobokHudText = '';
+
+  gasActive = false;
+  gasTimer = 0;
+  gasCooldown = 0;
+  gasTornadoGroup.visible = false;
+  _lastGasHudText = '';
+  for (const e of enemies) e.inGas = false;
+
+  lucksMaxingActive = false;
+  lucksMaxingCooldown = 0;
+  lucksMaxingPhase = 'none';
+  lucksMaxingTimer = 0;
+  lucksMaxingExploded = false;
+  enemiesFrozen = false;
+  _lastLuckHudText = '';
+  heroGroup.visible = true;
+  heroGroup.scale.setScalar(1);
+  if (carMesh) {
+    scene.remove(carMesh);
+    carMesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    carMesh = null;
+  }
   revertHeroTransform();
   bagAngle = 0;
   rebuildWeaponMeshes();
@@ -5406,6 +6640,19 @@ function reset() {
     });
   });
   rulerProjectiles.length = 0;
+
+    perfumeClouds.forEach(c => {
+    scene.remove(c.mesh);
+    c.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  });
+  perfumeClouds.length = 0;
+  for (const e of enemies) {
+    e._perfumeSlow = 0;
+    e._perfumeWeaken = 0;
+  }
 
   zones.forEach(z => scene.remove(z.group));
   zones.length = 0;
@@ -5846,9 +7093,14 @@ function createMobileControls() {
   }
 
   function handleAimTouch(cx, cy) {
-    if (!currentCharacter || !currentCharacter.isRoller) return;
+    if (!currentCharacter) return;
     if (!gameActive || paused) return;
     if (isTapOnUI(cx, cy)) return;
+    // Для Грифони тап по экрану тоже задаёт прицел,
+    // но только если у него есть направленное оружие
+    const isRoller = currentCharacter.isRoller;
+    const hasDirectional = !!(equippedWeapons.ruler || equippedWeapons.shotgun);
+    if (!isRoller && !hasDirectional) return;
     // Наводим сектор в точку тапа
     mobileAimAngle = getAimAngleAtScreen(cx, cy);
     // Обновляем сразу, чтобы удар (если сработает в этом кадре) уже бил в правильную сторону
@@ -5860,7 +7112,13 @@ function createMobileControls() {
   btnBerserk.addEventListener('touchstart', e => {
     e.preventDefault();
     btnBerserk.classList.add('pressed');
-    tryActivateKolobokBerserk();
+    if (currentCharacter && currentCharacter.isRoller) {
+      tryActivateKolobokBerserk();
+    } else if (currentCharacter && currentCharacter.doubleSector) {
+      tryActivateLucksMaxing();
+    } else {
+      tryActivateGrifonyaGas();
+    }
   }, { passive: false });
   btnBerserk.addEventListener('touchend', e => {
     e.preventDefault();
@@ -5869,8 +7127,21 @@ function createMobileControls() {
 
   // Показываем кнопку только Колобку с 5-го уровня
   setInterval(() => {
-    const show = currentCharacter && currentCharacter.isRoller &&
-                 level >= KOLOBOK_BERSERK_UNLOCK_LEVEL;
+    let show = false;
+    let icon = '🔥';
+    if (currentCharacter) {
+      if (currentCharacter.isRoller) {
+        show = level >= KOLOBOK_BERSERK_UNLOCK_LEVEL;
+        icon = '🔥';
+      } else if (currentCharacter.doubleSector) {
+        show = level >= LUCK_UNLOCK_LEVEL;
+        icon = '🚗';
+      } else {
+        show = level >= GAS_UNLOCK_LEVEL;
+        icon = '☣';
+      }
+    }
+    btnBerserk.textContent = icon;
     btnBerserk.style.display = show ? 'flex' : 'none';
   }, 200);
 
