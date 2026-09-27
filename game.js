@@ -1997,7 +1997,9 @@ function updateZoneHUD() {
 // =====================================================
 //  ПРИЦЕЛ ДЛЯ КОЛОБКА — мышь + тач
 // =====================================================
-const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+// true только если устройство использует тач как основной ввод
+// (hover: none → нет мыши, pointer: coarse → грубый указатель)
+const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 let mobileAimAngle = null;   // угол, заданный тапом по экрану (сбрасывается джойстиком)
 
 const mouseNDC = new THREE.Vector2(0, 0);
@@ -2029,23 +2031,33 @@ function getAimAngleAtScreen(cx, cy) {
 //   - иначе — последний тап по экрану
 //   - на десктопе — мышь
 function computeRollerAimAngle() {
-  const joyMag = Math.hypot(mobileInput.mx, mobileInput.mz);
+  const mi = (typeof mobileInput !== 'undefined' && mobileInput)
+    ? mobileInput
+    : { mx: 0, mz: 0 };
+  const joyMag = Math.hypot(mi.mx, mi.mz);
 
+  // 1. Активно двигаем джойстик — целимся по нему
   if (joyMag > 0.15) {
-    // Активно двигаемся — целимся по джойстику, сбрасываем прицел тапа
     mobileAimAngle = null;
-    return Math.atan2(mobileInput.mz, mobileInput.mx);
+    return Math.atan2(mi.mz, mi.mx);
   }
 
+  // 2. Задан прицел тапом по экрану
   if (mobileAimAngle !== null) {
     return mobileAimAngle;
   }
 
+  // 3. Десктоп — считаем угол к курсору мыши напрямую
   if (!isTouchDevice) {
-    return getMouseAimAngle();
+    if (typeof mouseRaycaster !== 'undefined' &&
+        typeof groundPlane !== 'undefined') {
+      mouseRaycaster.setFromCamera(mouseNDC, camera);
+      mouseRaycaster.ray.intersectPlane(groundPlane, mouseWorld);
+      return Math.atan2(mouseWorld.z - hero.z, mouseWorld.x - hero.x);
+    }
   }
 
-  // Иначе — оставляем текущий угол (не двигаем)
+  // 4. Нечего наводить — оставляем прошлый угол
   return hero.attackAngle;
 }
 
@@ -2699,11 +2711,20 @@ function resolveHouseCollision(px, pz, r) {
 //  УДАР РЮКЗАКОМ
 // =====================================================
 let lastAttack = 0;
+let lastJumpAttack = 0;
 
 function doAttack() {
   const now = performance.now();
-  if (now - lastAttack < stats.cooldown) return;
-  lastAttack = now;
+  const isJumpAttack = hero.isJumping && hero.height > 0.3;
+
+  // Прыжковый удар имеет свой кулдаун и не блокируется наземным
+  if (isJumpAttack) {
+    if (now - lastJumpAttack < 350) return;
+    lastJumpAttack = now;
+  } else {
+    if (now - lastAttack < stats.cooldown) return;
+    lastAttack = now;
+  }
 
   // ============================================================
   //  УДАР В ПРЫЖКЕ — AoE slam
@@ -2718,9 +2739,9 @@ function doAttack() {
     const heightRatio = Math.min(1, hero.height / maxHeight);
     const damage = stats.damage * (1 + heightRatio * (JUMP_ATTACK_MULT - 1));
 
-    // Направление прыжкового удара
+        // Направление прыжкового удара
     if (currentCharacter && currentCharacter.isRoller) {
-      hero.attackAngle = getMouseAimAngle();
+      hero.attackAngle = computeRollerAimAngle();
     } else {
       let nearest = null, nd = Infinity;
       for (const e of enemies) {
@@ -2785,9 +2806,9 @@ function doAttack() {
   // ============================================================
   hero.attackTimer = 0.18;
 
-  // Колобок бьёт в сторону мыши, Грифоня — в сторону ближайшего врага
+   // Колобок бьёт в сторону мыши/джойстика, Грифоня — в сторону ближайшего врага
   if (currentCharacter && currentCharacter.isRoller) {
-    hero.attackAngle = getMouseAimAngle();
+    hero.attackAngle = computeRollerAimAngle();
   } else {
     let nearest = null, nd = Infinity;
     for (const e of enemies) {
@@ -3614,9 +3635,11 @@ function loop(now) {
       if (keys.s || keys.down) mz += 1;
       if (keys.a || keys.left) mx -= 1;
       if (keys.d || keys.right) mx += 1;
-      // Мобильный джойстик
-      mx += mobileInput.mx;
-      mz += mobileInput.mz;
+            // Мобильный джойстик (если он создан)
+      if (typeof mobileInput !== 'undefined' && mobileInput) {
+        mx += mobileInput.mx || 0;
+        mz += mobileInput.mz || 0;
+      }
     }
 
     if (mx || mz) {
@@ -3953,6 +3976,8 @@ function reset() {
   hammerSwingTimer = 0;
   hammerStacks = 0;
   hammerSlamCooldown = 0;
+  lastAttack = 0;
+  lastJumpAttack = 0;
   hammerSlamState.active = false;
   hammerSlamState.timer = 0;
   lastShiftTime = 0;
@@ -4311,10 +4336,29 @@ function createMobileControls() {
   addEventListener('mouseup',   () => { if (joyActive) endJoy(); });
 
   // ---------- Кнопка атаки ----------
-  btnAttack.addEventListener('touchstart', e => {
+    btnAttack.addEventListener('touchstart', e => {
     e.preventDefault();
     btnAttack.classList.add('pressed');
-    if (gameActive && !paused) doAttack();
+    if (!gameActive || paused) return;
+    // Если герой уже в воздухе — сразу прыжковый удар
+    if (hero.isJumping && hero.height > 0.3) {
+      doAttack();
+      return;
+    }
+    // Если только что нажали прыжок (в пределах 250мс) — откладываем атаку
+    // до момента, когда герой уже будет в воздухе
+    const sinceJump = performance.now() - lastShiftTime;
+    if (sinceJump < 250 && hero.jumpCooldown > 0) {
+      setTimeout(() => {
+        if (gameActive && !paused && hero.isJumping && hero.height > 0.3) {
+          doAttack();
+        } else if (gameActive && !paused) {
+          doAttack(); // на всякий случай — если прыжок не удался
+        }
+      }, Math.max(0, 120 - sinceJump));
+    } else {
+      doAttack();
+    }
   }, { passive: false });
   btnAttack.addEventListener('touchend', e => {
     e.preventDefault();
