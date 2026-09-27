@@ -313,6 +313,21 @@ const JUMP_ATTACK_MULT = 2.0;              // ×2 урона от обычног
 const JUMP_ATTACK_RADIUS_BONUS = 2.0;      // +2 юнита к радиусу (не множитель!)
 
 // =====================================================
+//  ЯРОСТЬ КОЛОБКА (Q)
+// =====================================================
+const KOLOBOK_BERSERK_DURATION = 6.0;         // сек
+const KOLOBOK_BERSERK_COOLDOWN = 20.0;        // сек
+// DPS ярости = speed × SPEED_FACTOR + damage × DAMAGE_FACTOR
+const KOLOBOK_BERSERK_SPEED_FACTOR  = 2.5;
+const KOLOBOK_BERSERK_DAMAGE_FACTOR = 1.5;
+const KOLOBOK_BERSERK_RADIUS = 2.0;           // радиус касания
+const KOLOBOK_BERSERK_UNLOCK_LEVEL = 5;
+
+let kolobokBerserkActive = false;
+let kolobokBerserkTimer = 0;
+let kolobokBerserkCooldown = 0;
+
+// =====================================================
 //  УЧИТЕЛЯ — константы
 // =====================================================
 const TEACHER_HP_MULT    = 3.0;   // в 3 раза сильнее (HP)
@@ -432,17 +447,19 @@ const WEAPONS = [
     baseDuration: 4,
     baseSpeedMult: 1.3,
     baseJumpMult: 1.3,
-    // Рост от стаков (каждое срабатывание)
+        // Рост от стаков (каждое срабатывание)
     stackDurationBonus: 0.2,
     stackMultBonus: 0.02,
     maxDuration: 8,
     maxMult: 2.2,
+    // Бафф урона (базовый ×1.4, растёт со стаками)
+    baseDamageMult: 1.4,
     // Активная способность (открывается на 2 ур.)
     // Индексы: [ур.1, ур.2, ур.3, ур.4, ур.5]
     // Ур.1 не используется (слам ещё не открыт), но нужен для правильного смещения
     slamCooldown:   [0,   6000, 5000, 4000, 3000],
     slamDamageMult: [0,   7.0,  9.0,  12.0, 15.0],
-    slamRadius:     [0,   7.0,  8.0,  9.0,  10.0],
+    slamRadius:     [0,   12.0,  13.0,  14.0,  17.0],
   },
 ];
 
@@ -478,6 +495,7 @@ const weaponTimers = {
 let heroTransformTimer = 0;
 let heroTransformSpeedMult = 1.3;
 let heroTransformJumpMult = 1.3;
+let heroTransformDamageMult = 1.0;
 let hammerSwingTimer = 0;
 
 // Стаки авто-бафа — каждое срабатывание молота усиливает следующий баф
@@ -895,17 +913,20 @@ function useWeapons(dt) {
         weaponTimers.hammer = def.autoCooldown;
 
         // Каждое срабатывание — +1 стак, усиливающий баф
-        hammerStacks++;
+                hammerStacks++;
         const dur = Math.min(def.maxDuration,
           def.baseDuration + hammerStacks * def.stackDurationBonus);
         const sMul = Math.min(def.maxMult,
           def.baseSpeedMult + hammerStacks * def.stackMultBonus);
         const jMul = Math.min(def.maxMult,
           def.baseJumpMult + hammerStacks * def.stackMultBonus);
+        const dMul = Math.min(def.maxMult,
+          def.baseDamageMult + hammerStacks * def.stackMultBonus);
 
         heroTransformTimer = dur;
         heroTransformSpeedMult = sMul;
         heroTransformJumpMult = jMul;
+        heroTransformDamageMult = dMul;
         hammerSwingTimer = 0.4;
 
         applyHeroTransform();
@@ -2072,8 +2093,7 @@ const mobileInput = { mx: 0, mz: 0 };
 
 addEventListener('keydown', e => {
   const c = e.code;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-       'ShiftLeft', 'ShiftRight'].includes(c)) {
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(c)) {
     e.preventDefault();
   }
   if (c === 'KeyW') keys.w = 1;
@@ -2084,9 +2104,9 @@ addEventListener('keydown', e => {
   if (c === 'ArrowLeft') keys.left = 1;
   if (c === 'ArrowDown') keys.down = 1;
   if (c === 'ArrowRight') keys.right = 1;
-  if (c === 'ShiftLeft' || c === 'ShiftRight') {
+    // Пробел — прыжок, двойной пробел — удар молотом
+  if (c === 'Space') {
     const now = performance.now();
-    // Двойной Shift → удар молотом (если открыт)
     if (now - lastShiftTime < 300 && weaponLevel('hammer') >= 2 &&
         hammerSlamCooldown <= 0 && !hammerSlamState.active) {
       triggerHammerSlam();
@@ -2096,9 +2116,9 @@ addEventListener('keydown', e => {
       lastShiftTime = now;
     }
   }
-  if (c === 'Space') {
-    keys.space = 1;
-    if (gameActive && !paused) doAttack();
+
+  if (c === 'KeyQ') {
+    if (gameActive && !paused) tryActivateKolobokBerserk();
   }
 });
 
@@ -2112,8 +2132,7 @@ addEventListener('keyup', e => {
   if (c === 'ArrowLeft') keys.left = 0;
   if (c === 'ArrowDown') keys.down = 0;
   if (c === 'ArrowRight') keys.right = 0;
-  if (c === 'ShiftLeft' || c === 'ShiftRight') keys.shift = 0;
-  if (c === 'Space') keys.space = 0;
+  if (c === 'Space') keys.shift = 0;
 });
 
 addEventListener('blur', () => {
@@ -2717,6 +2736,10 @@ function doAttack() {
   const now = performance.now();
   const isJumpAttack = hero.isJumping && hero.height > 0.3;
 
+  // Бафф молота усиливает урон физических атак
+  const hammerDmgMul = heroTransformTimer > 0 ? heroTransformDamageMult : 1;
+  const baseDamage = stats.damage * hammerDmgMul;
+
   // Прыжковый удар имеет свой кулдаун и не блокируется наземным
   if (isJumpAttack) {
     if (now - lastJumpAttack < 350) return;
@@ -2737,7 +2760,7 @@ function doAttack() {
     // у земли → ×1 (как обычный удар), в верхней точке → ×JUMP_ATTACK_MULT
     const maxHeight = JUMP_HEIGHT * (heroTransformTimer > 0 ? heroTransformJumpMult : 1);
     const heightRatio = Math.min(1, hero.height / maxHeight);
-    const damage = stats.damage * (1 + heightRatio * (JUMP_ATTACK_MULT - 1));
+    const damage = baseDamage * (1 + heightRatio * (JUMP_ATTACK_MULT - 1));
 
         // Направление прыжкового удара
     if (currentCharacter && currentCharacter.isRoller) {
@@ -2841,7 +2864,7 @@ function doAttack() {
     diff = Math.min(diff, Math.PI * 2 - diff);
     if (diff > attackHalfAngle) continue;
 
-    e.hp -= stats.damage;
+    e.hp -= baseDamage;
     const kb = 12;
     e.kbX = Math.cos(Math.atan2(dz, dx)) * kb;
     e.kbZ = Math.sin(Math.atan2(dz, dx)) * kb;
@@ -2856,7 +2879,7 @@ function doAttack() {
     if (dist < stats.radius + boss.r) {
       let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
       diff = Math.min(diff, Math.PI * 2 - diff);
-      if (diff <= attackHalfAngle) damageBoss(stats.damage);
+        if (diff <= attackHalfAngle) damageBoss(baseDamage);
     }
   }
 
@@ -2868,7 +2891,7 @@ function doAttack() {
     if (dist > stats.radius + s.r) continue;
     let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
     diff = Math.min(diff, Math.PI * 2 - diff);
-    if (diff <= attackHalfAngle) damageStatue(s, i, stats.damage);
+      if (diff <= attackHalfAngle) damageStatue(s, i, baseDamage);
   }
 }
 
@@ -2957,10 +2980,11 @@ function triggerHammerSlam() {
   if (!gameActive || paused) return;
 
   const def = WEAPONS.find(w => w.id === 'hammer');
+  const activeMul = heroTransformTimer > 0 ? heroTransformDamageMult : 1;
   hammerSlamState.active = true;
   hammerSlamState.timer = 0;
   hammerSlamState.duration = 0.7;
-  hammerSlamState.damage = stats.damage * def.slamDamageMult[lvl - 1];
+  hammerSlamState.damage = stats.damage * def.slamDamageMult[lvl - 1] * activeMul;
   hammerSlamState.radius = def.slamRadius[lvl - 1];
   hammerSlamState.landed = false;
 
@@ -3054,6 +3078,183 @@ function updateHammerSlam(dt) {
     hammerSlamState.active = false;
     hero.height = 0;
     heroGroup.rotation.y = hero.attackAngle + Math.PI;
+  }
+}
+
+// =====================================================
+//  ЯРОСТЬ КОЛОБКА — активация и апдейт
+// =====================================================
+function tryActivateKolobokBerserk() {
+  if (!currentCharacter || !currentCharacter.isRoller) return;
+  if (level < KOLOBOK_BERSERK_UNLOCK_LEVEL) return;
+  if (kolobokBerserkActive) return;
+  if (kolobokBerserkCooldown > 0) return;
+  if (!gameActive || paused) return;
+
+  kolobokBerserkActive = true;
+  kolobokBerserkTimer = KOLOBOK_BERSERK_DURATION;
+  kolobokAuraGroup.visible = true;
+
+  // Прерываем прыжок — в ярости нельзя быть в воздухе
+  hero.isJumping = false;
+  hero.height = 0;
+
+  // Вспышка при активации
+  burst(hero.x, hero.z, 0xffaa00);
+  burst(hero.x, hero.z, 0xff5522);
+  cameraShake(0.15);
+}
+
+function updateKolobokBerserk(dt) {
+  // Откат
+  if (kolobokBerserkCooldown > 0) {
+    kolobokBerserkCooldown -= dt;
+    if (kolobokBerserkCooldown < 0) kolobokBerserkCooldown = 0;
+  }
+
+  if (!kolobokBerserkActive) {
+    if (kolobokAuraGroup.visible) kolobokAuraGroup.visible = false;
+    return;
+  }
+
+  // Длительность
+  kolobokBerserkTimer -= dt;
+  if (kolobokBerserkTimer <= 0) {
+    kolobokBerserkActive = false;
+    kolobokBerserkTimer = 0;
+    kolobokBerserkCooldown = KOLOBOK_BERSERK_COOLDOWN;
+    kolobokAuraGroup.visible = false;
+    burst(hero.x, hero.z, 0xff5522);
+    return;
+  }
+
+  // Привязка ауры к герою
+  kolobokAuraGroup.position.set(hero.x, 0, hero.z);
+
+  // Анимация
+  const t = performance.now() * 0.006;
+  kAuraRing.scale.setScalar(1 + Math.sin(t) * 0.07);
+  kAuraRing2.scale.setScalar(1 + Math.sin(t * 0.8 + 1) * 0.1);
+  kAuraSphereMat.opacity = 0.12 + Math.sin(t * 1.4) * 0.05;
+  kAuraRing.rotation.z += dt * 1.5;
+  kAuraRing2.rotation.z -= dt * 1.0;
+
+  // Вращаем спицы
+  for (const s of kAuraSpokes) {
+    s.rotation.z += dt * 2.2;
+  }
+
+   // Урон = скорость × коэф. + урон × коэф.
+  const speedMul = heroTransformTimer > 0 ? heroTransformSpeedMult : 1;
+  const dmgMul = heroTransformTimer > 0 ? heroTransformDamageMult : 1;
+  const currentSpeed = stats.speed * speedMul;
+  const currentDamage = stats.damage * dmgMul;
+  const dps = (currentSpeed * KOLOBOK_BERSERK_SPEED_FACTOR) * 2.5
+            + currentDamage * KOLOBOK_BERSERK_DAMAGE_FACTOR;
+
+  // Врагам
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.dying || e.flyingToBoss) continue;
+    const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+    if (d < KOLOBOK_BERSERK_RADIUS + e.r) {
+      e.hp -= dps * dt;
+      if (Math.random() < 0.15) burst(e.x, e.z, 0xffaa00);
+      if (e.hp <= 0) killEnemy(e, i);
+    }
+  }
+
+  // Боссу
+  if (boss.active) {
+    const d = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+    if (d < KOLOBOK_BERSERK_RADIUS + boss.r) {
+      damageBoss(dps * dt);
+    }
+  }
+
+  // Статуям
+  for (let i = statues.length - 1; i >= 0; i--) {
+    const s = statues[i];
+    const d = Math.hypot(s.x - hero.x, s.z - hero.z);
+    if (d < KOLOBOK_BERSERK_RADIUS + s.r) {
+      damageStatue(s, i, dps * dt);
+    }
+  }
+}
+
+// ---------- HUD для способности ----------
+const kolobokHudEl = (function createKolobokHud() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #kolobokHud {
+      position: fixed;
+      bottom: 140px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 30, 40, 0.85);
+      border: 3px solid #ffaa00;
+      border-radius: 20px;
+      padding: 8px 22px;
+      color: #ffdd88;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      font-size: 16px;
+      z-index: 60;
+      display: none;
+      letter-spacing: 1px;
+      box-shadow: 0 0 20px rgba(255, 170, 0, 0.4);
+      text-shadow: 2px 2px 0 #000;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #kolobokHud.ready { animation: kPulse 1.2s ease-in-out infinite; }
+    #kolobokHud.active {
+      background: rgba(80, 30, 10, 0.92);
+      color: #ffeedd;
+      border-color: #ff5522;
+      animation: none;
+      box-shadow: 0 0 30px rgba(255, 100, 20, 0.85);
+    }
+    @keyframes kPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(255, 170, 0, 0.4); }
+      50%      { box-shadow: 0 0 35px rgba(255, 170, 0, 0.95); }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'kolobokHud';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastKolobokHudText = '';
+function updateKolobokHud() {
+  const isRoller = currentCharacter && currentCharacter.isRoller;
+  if (!isRoller || level < KOLOBOK_BERSERK_UNLOCK_LEVEL) {
+    if (kolobokHudEl.style.display !== 'none') {
+      kolobokHudEl.style.display = 'none';
+      _lastKolobokHudText = '';
+    }
+    return;
+  }
+
+  let text, cls;
+  if (kolobokBerserkActive) {
+    text = `🔥 ЯРОСТЬ! ${kolobokBerserkTimer.toFixed(1)}с`;
+    cls = 'active';
+  } else if (kolobokBerserkCooldown > 0) {
+    text = `🔥 Ярость: ${kolobokBerserkCooldown.toFixed(1)}с`;
+    cls = '';
+  } else {
+    text = `🔥 Q — ЯРОСТЬ ГОТОВА`;
+    cls = 'ready';
+  }
+
+  if (text !== _lastKolobokHudText || kolobokHudEl.className !== cls) {
+    kolobokHudEl.textContent = text;
+    kolobokHudEl.className = cls;
+    kolobokHudEl.style.display = 'block';
+    _lastKolobokHudText = text;
   }
 }
 
@@ -3375,6 +3576,63 @@ function updateAttackIndicator() {
 }
 
 // =====================================================
+//  АУРА ЯРОСТИ КОЛОБКА
+// =====================================================
+const kolobokAuraGroup = new THREE.Group();
+kolobokAuraGroup.visible = false;
+scene.add(kolobokAuraGroup);
+
+// Кольцо на земле
+const kAuraRingGeo = new THREE.RingGeometry(2.0, 2.5, 40);
+const kAuraRingMat = new THREE.MeshBasicMaterial({
+  color: 0xffaa00, transparent: true, opacity: 0.75,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const kAuraRing = new THREE.Mesh(kAuraRingGeo, kAuraRingMat);
+kAuraRing.rotation.x = -Math.PI / 2;
+kAuraRing.position.y = 0.12;
+kolobokAuraGroup.add(kAuraRing);
+
+// Второе кольцо — сдвинутое по фазе для пульсации
+const kAuraRing2Geo = new THREE.RingGeometry(2.4, 2.7, 40);
+const kAuraRing2Mat = new THREE.MeshBasicMaterial({
+  color: 0xff6622, transparent: true, opacity: 0.5,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const kAuraRing2 = new THREE.Mesh(kAuraRing2Geo, kAuraRing2Mat);
+kAuraRing2.rotation.x = -Math.PI / 2;
+kAuraRing2.position.y = 0.13;
+kolobokAuraGroup.add(kAuraRing2);
+
+// Огненная сфера
+const kAuraSphereGeo = new THREE.SphereGeometry(1.9, 18, 14);
+const kAuraSphereMat = new THREE.MeshBasicMaterial({
+  color: 0xff5522, transparent: true, opacity: 0.15,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const kAuraSphere = new THREE.Mesh(kAuraSphereGeo, kAuraSphereMat);
+kAuraSphere.position.y = 1.2;
+kolobokAuraGroup.add(kAuraSphere);
+
+// Вращающиеся спицы
+const kAuraSpokes = [];
+for (let i = 0; i < 6; i++) {
+  const a = (i / 6) * Math.PI * 2;
+  const spoke = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.25, 1.4),
+    new THREE.MeshBasicMaterial({
+      color: 0xffdd44, transparent: true, opacity: 0.6,
+      side: THREE.DoubleSide, depthWrite: false,
+    })
+  );
+  spoke.rotation.x = -Math.PI / 2;
+  spoke.rotation.z = a;
+  spoke.position.set(Math.cos(a) * 1.6, 0.14, Math.sin(a) * 1.6);
+  kolobokAuraGroup.add(spoke);
+  kAuraSpokes.push(spoke);
+}
+
+// =====================================================
 //  ПРЫЖОК
 // =====================================================
 function updateJump(dt) {
@@ -3384,7 +3642,7 @@ function updateJump(dt) {
   }
 
   if (keys.shift && !hero.isJumping && hero.jumpCooldown <= 0 &&
-      gameActive && !paused && !hammerSlamState.active) {
+      gameActive && !paused && !hammerSlamState.active && !kolobokBerserkActive) {
     hero.isJumping = true;
     hero.jumpTimer = JUMP_DURATION;
     hero.jumpCooldown = Math.max(600, (stats.jumpCooldown || 2000) - jumpCooldownBonus);
@@ -3712,6 +3970,8 @@ function loop(now) {
     updateWeaponHud();
 
     updateHammerSlam(dt);
+    updateKolobokBerserk(dt);
+    updateKolobokHud();
     useWeapons(dt);
     updateXpOrbs(dt);
 
@@ -3846,7 +4106,7 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
-      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss) {
+      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive) {
         hp -= e.damage * dt * 4;
         if (hp <= 0 && gameActive) {
           hp = 0;
@@ -3973,6 +4233,7 @@ function reset() {
   weaponTimers.slingshot = 0;
   weaponTimers.hammer = 0;
   heroTransformTimer = 0;
+  heroTransformDamageMult = 1.0;
   hammerSwingTimer = 0;
   hammerStacks = 0;
   hammerSlamCooldown = 0;
@@ -3982,6 +4243,11 @@ function reset() {
   hammerSlamState.timer = 0;
   lastShiftTime = 0;
   cameraShakeAmount = 0;
+  kolobokBerserkActive = false;
+  kolobokBerserkTimer = 0;
+  kolobokBerserkCooldown = 0;
+  kolobokAuraGroup.visible = false;
+  _lastKolobokHudText = '';
   revertHeroTransform();
   bagAngle = 0;
   rebuildWeaponMeshes();
@@ -4142,6 +4408,18 @@ function createCharacterSelect() {
 }
 
 // =====================================================
+//  АТАКА МЫШЬЮ (только на десктопе)
+// =====================================================
+renderer.domElement.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;          // только левая кнопка
+  if (isTouchDevice) return;            // на мобиле не дублируем
+  if (gameActive && !paused) doAttack();
+});
+
+// ПКМ и СКМ можно использовать позже под другие действия
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+// =====================================================
 //  МОБИЛЬНОЕ УПРАВЛЕНИЕ (джойстик + кнопки)
 // =====================================================
 function createMobileControls() {
@@ -4256,6 +4534,14 @@ function createMobileControls() {
       #restart:active {
         transform: translateY(3px);
       }
+      #btnBerserk {
+        bottom: 250px;
+        right: 60px;
+        width: 72px;
+        height: 72px;
+        background: radial-gradient(circle at 35% 30%, #ffbb44, #b84010);
+        display: none;
+      }
     }
   `;
   document.head.appendChild(style);
@@ -4266,6 +4552,7 @@ function createMobileControls() {
     <div id="joyBase"><div id="joyKnob"></div></div>
     <div class="mobileBtn" id="btnAttack">💥</div>
     <div class="mobileBtn" id="btnJump">⤴</div>
+    <div class="mobileBtn" id="btnBerserk">🔥</div>
   `;
   document.body.appendChild(container);
 
@@ -4419,6 +4706,25 @@ function createMobileControls() {
     // Обновляем сразу, чтобы удар (если сработает в этом кадре) уже бил в правильную сторону
     hero.attackAngle = mobileAimAngle;
   }
+
+    // ---------- Кнопка ярости (только для Колобка с 5 ур.) ----------
+  const btnBerserk = document.getElementById('btnBerserk');
+  btnBerserk.addEventListener('touchstart', e => {
+    e.preventDefault();
+    btnBerserk.classList.add('pressed');
+    tryActivateKolobokBerserk();
+  }, { passive: false });
+  btnBerserk.addEventListener('touchend', e => {
+    e.preventDefault();
+    btnBerserk.classList.remove('pressed');
+  }, { passive: false });
+
+  // Показываем кнопку только Колобку с 5-го уровня
+  setInterval(() => {
+    const show = currentCharacter && currentCharacter.isRoller &&
+                 level >= KOLOBOK_BERSERK_UNLOCK_LEVEL;
+    btnBerserk.style.display = show ? 'flex' : 'none';
+  }, 200);
 
   document.addEventListener('touchstart', e => {
     for (const t of e.changedTouches) {
