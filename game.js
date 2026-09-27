@@ -4,6 +4,42 @@ import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 import { CHARACTERS } from './characters.js';
 
 // =====================================================
+//  ФОНОВАЯ МУЗЫКА
+// =====================================================
+const bgMusic = new Audio('./bg_music.mp3');
+bgMusic.loop = true;
+bgMusic.preload = 'auto';
+// Начальная громкость 15%
+// Загружаем сохранённую громкость или ставим 15%
+let bgMusicVolume = (() => {
+  try {
+    const saved = localStorage.getItem('bgMusicVolume');
+    if (saved !== null) {
+      const v = parseFloat(saved);
+      if (!isNaN(v) && v >= 0 && v <= 1) return v;
+    }
+  } catch (e) {}
+  return 0.15;
+})();
+bgMusic.volume = bgMusicVolume;
+
+// Автозапуск после первого взаимодействия пользователя
+// (браузеры блокируют autoplay без действия пользователя)
+let bgMusicStarted = false;
+function tryStartBgMusic() {
+  if (bgMusicStarted) return;
+  bgMusic.play().then(() => {
+    bgMusicStarted = true;
+  }).catch(() => {
+    // Ждём следующего события
+  });
+}
+// Первое касание / клик / нажатие клавиши — запускаем
+['click', 'keydown', 'touchstart'].forEach(evt => {
+  addEventListener(evt, tryStartBgMusic, { once: false, passive: true });
+});
+
+// =====================================================
 //  СЦЕНА, КАМЕРА, РЕНДЕРЕР
 // =====================================================
 const scene = new THREE.Scene();
@@ -397,6 +433,7 @@ let levelUpQueue = 0;
 let kills = 0;
 let nextWeaponLevel = 5;
 let weaponChoiceQueue = 0;
+let runTimer = 0;   // секунды с начала забега
 
 const hero = {
   x: 0, z: 0,
@@ -424,7 +461,7 @@ const WEAPONS = [
     desc: 'Пронзающий удар по линии. С каждым уровнем — больше урона и быстрее атака.',
     color: 0x3a5fd0,
     maxLevel: 5,
-    lineLength: [13, 15, 18, 21, 24],
+    lineLength: [8, 10, 12, 15, 18],
     damage:     [55, 95, 145, 205, 280],
     cooldown:   [500, 420, 350, 280, 220],
   },
@@ -444,13 +481,14 @@ const WEAPONS = [
     id: 'ruler',
     name: 'Линейка',
     ico: '📏',
-    desc: 'Рубящий удар широким сектором. С каждым уровнем — больше радиус, шире замах и быстрее.',
+    desc: 'Бумеранг. Летит вперёд и возвращается — бьёт врагов на пути туда и обратно. С каждым уровнем — больше урон и дальность.',
     color: 0xd9a02a,
     maxLevel: 5,
-    slashRadius: [7.0, 8.2, 9.5, 11.0, 13.0],
-    damage:      [50, 80, 120, 170, 235],
-    cooldown:    [550, 480, 420, 360, 300],
-    slashAngle:  [0.95, 1.05, 1.15, 1.25, 1.4],
+    range:   [10, 12, 15, 18, 22],     // дальность полёта вперёд
+    damage:  [50, 80, 120, 170, 235],  // урон за касание
+    cooldown:[2000, 1800, 1600, 1400, 1200],
+    projectileSpeed: 22,                // юнитов в секунду (постоянно)
+    hitRadius: 0.9,                     // радиус попадания по врагу
   },
   {
     id: 'slingshot',
@@ -490,6 +528,18 @@ const WEAPONS = [
     slamDamageMult: [0,   7.0,  9.0,  12.0, 15.0],
     slamRadius:     [0,   12.0,  13.0,  14.0,  17.0],
   },
+  {
+    id: 'shotgun',
+    name: 'Дробовик',
+    ico: '🔫',
+    desc: 'Заряжен крупной солью. Раз в 3 сек бьёт широким конусом — задевает всех врагов в секторе. С каждым уровнем — шире залп и больше урон.',
+    color: 0x8a4a2a,
+    maxLevel: 5,
+    range:      [11, 13, 15, 17, 19],
+    damage:     [110, 175, 260, 370, 510],
+    cooldown:   [3000, 3000, 3000, 3000, 3000],
+    halfAngle:  [0.35, 0.45, 0.55, 0.68, 0.85],  // полураствор конуса (радианы)
+  },
 ];
 
 // =====================================================
@@ -506,6 +556,7 @@ const weaponDamageFlat = {
   bag: 0,
   ruler: 0,
   slingshot: 0,
+  shotgun: 0,
 };
 
 const equippedWeapons = {};
@@ -516,6 +567,7 @@ const weaponTimers = {
   ruler: 0,
   slingshot: 0,
   hammer: 0,
+  shotgun: 0,
 };
 
 // =====================================================
@@ -545,6 +597,7 @@ const hammerSlamState = {
 
 let bagAngle = 0;
 const projectiles = [];
+const rulerProjectiles = [];     // активные бумеранги
 const weaponMeshes = {};
 let bagMesh = null;
 
@@ -730,6 +783,43 @@ function rebuildWeaponMeshes() {
     heroGroup.add(g);
     weaponMeshes.hammer = g;
   }
+
+  if (equippedWeapons.shotgun) {
+    const g = new THREE.Group();
+    // Ствол
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.11, 1.5, 8),
+      new THREE.MeshLambertMaterial({ color: 0x3a3a3a })
+    );
+    barrel.rotation.z = Math.PI / 2;
+    barrel.position.set(0.55, 0, 0);
+    barrel.castShadow = true;
+    g.add(barrel);
+    // Второй ствол сверху
+    const barrel2 = barrel.clone();
+    barrel2.position.set(0.55, 0.12, 0);
+    g.add(barrel2);
+    // Приклад
+    const stock = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.22, 0.18),
+      new THREE.MeshLambertMaterial({ color: 0x6b3a1a })
+    );
+    stock.position.set(-0.5, -0.05, 0);
+    stock.castShadow = true;
+    g.add(stock);
+    // Рукоять снизу
+    const grip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 0.35, 0.14),
+      new THREE.MeshLambertMaterial({ color: 0x4a2a1a })
+    );
+    grip.position.set(-0.2, -0.25, 0);
+    g.add(grip);
+
+    g.position.set(0.9, 1.7, 0.4);
+    g.rotation.y = -0.15;
+    heroGroup.add(g);
+    weaponMeshes.shotgun = g;
+  }
 }
 
 // =====================================================
@@ -827,7 +917,7 @@ function useWeapons(dt) {
     }
   }
 
-  // ЛИНЕЙКА
+  // ЛИНЕЙКА — бумеранг
   if (equippedWeapons.ruler) {
     weaponTimers.ruler -= dt * 1000;
     if (weaponTimers.ruler <= 0) {
@@ -835,55 +925,47 @@ function useWeapons(dt) {
       weaponTimers.ruler = cd;
 
       const dmg = weaponStat('ruler', 'damage');
-      const r = weaponStat('ruler', 'slashRadius');
-      const halfAngle = weaponStat('ruler', 'slashAngle');
+      const range = weaponStat('ruler', 'range');
+      const def = WEAPONS.find(w => w.id === 'ruler');
+      const speed = def.projectileSpeed;
       const angle = hero.attackAngle;
 
-      let hitSomething = false;
-      for (let i = enemies.length - 1; i >= 0; i--) {
-        const e = enemies[i];
-        if (e.dying) continue;
-        const dx = e.x - hero.x;
-        const dz = e.z - hero.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist > r + e.r) continue;
-        let diff = Math.abs(Math.atan2(dz, dx) - angle);
-        diff = Math.min(diff, Math.PI * 2 - diff);
-        if (diff > halfAngle) continue;
+      // Создаём меш бумеранга
+      const mesh = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.6, 0.06, 0.35),
+        new THREE.MeshLambertMaterial({ color: 0xe0b040 })
+      );
+      body.castShadow = true;
+      mesh.add(body);
+      // Деления
+      for (let k = 0; k < 6; k++) {
+        const tick = new THREE.Mesh(
+          new THREE.BoxGeometry(0.02, 0.07, 0.12),
+          new THREE.MeshBasicMaterial({ color: 0x3a2a1a })
+        );
+        tick.position.set(-0.6 + k * 0.24, 0.005, 0);
+        mesh.add(tick);
+      }
+      mesh.position.set(hero.x, 1.0, hero.z);
+      scene.add(mesh);
 
-        e.hp -= dmg;
-        hitSomething = true;
-        if (e.hp <= 0) killEnemy(e, i);
-      }
-            // Проверка попадания в босса
-      if (boss.active) {
-        const dx = boss.x - hero.x;
-        const dz = boss.z - hero.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist < r + boss.r) {
-          let diff = Math.abs(Math.atan2(dz, dx) - angle);
-          diff = Math.min(diff, Math.PI * 2 - diff);
-          if (diff < halfAngle + 0.15) {
-            damageBoss(dmg);
-            hitSomething = true;
-          }
-        }
-      }
-      // Проверка попадания по статуям
-      for (let i = statues.length - 1; i >= 0; i--) {
-        const s = statues[i];
-        const dx = s.x - hero.x;
-        const dz = s.z - hero.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist > r + s.r) continue;
-        let diff = Math.abs(Math.atan2(dz, dx) - angle);
-        diff = Math.min(diff, Math.PI * 2 - diff);
-        if (diff < halfAngle + 0.15) {
-          damageStatue(s, i, dmg);
-          hitSomething = true;
-        }
-      }
-      if (hitSomething) spawnSlashEffect(hero.x, hero.z, angle, r, halfAngle);
+      rulerProjectiles.push({
+        x: hero.x,
+        z: hero.z,
+        angle: angle,
+        phase: 'out',                 // 'out' → летит вперёд, 'back' → возвращается
+        speed: speed,
+        maxDistance: range,
+        traveled: 0,
+        damage: dmg,
+        mesh: mesh,
+        spin: 0,
+        hitSet: new Set(),            // кого уже ударил в этой фазе
+      });
+
+      // Вспышка при броске
+      burst(hero.x, hero.z, 0xffd966);
     }
   }
 
@@ -930,6 +1012,82 @@ function useWeapons(dt) {
       }
     }
   }
+
+    // =====================================================
+  //  ДРОБОВИК — широкий сектор раз в 3 секунды
+  // =====================================================
+  if (equippedWeapons.shotgun) {
+    weaponTimers.shotgun -= dt * 1000;
+    if (weaponTimers.shotgun <= 0) {
+      const cd = weaponStat('shotgun', 'cooldown');
+      weaponTimers.shotgun = cd;
+
+      const dmg = weaponStat('shotgun', 'damage');
+      const range = weaponStat('shotgun', 'range');
+      const halfAngle = weaponStat('shotgun', 'halfAngle');
+      const angle = hero.attackAngle;
+
+      let hitAny = false;
+
+      // Урон по врагам
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (e.dying || e.flyingToBoss) continue;
+        const dx = e.x - hero.x;
+        const dz = e.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > range + e.r) continue;
+        let diff = Math.abs(Math.atan2(dz, dx) - angle);
+        diff = Math.min(diff, Math.PI * 2 - diff);
+        if (diff > halfAngle) continue;
+
+        e.hp -= dmg;
+        // Лёгкий отброс
+        const kb = 8;
+        e.kbX = Math.cos(Math.atan2(dz, dx)) * kb;
+        e.kbZ = Math.sin(Math.atan2(dz, dx)) * kb;
+        hitAny = true;
+        if (e.hp <= 0) killEnemy(e, i);
+      }
+
+      // Босс
+      if (boss.active) {
+        const dx = boss.x - hero.x;
+        const dz = boss.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < range + boss.r) {
+          let diff = Math.abs(Math.atan2(dz, dx) - angle);
+          diff = Math.min(diff, Math.PI * 2 - diff);
+          if (diff < halfAngle + 0.15) {
+            damageBoss(dmg);
+            hitAny = true;
+          }
+        }
+      }
+
+      // Статуи
+      for (let i = statues.length - 1; i >= 0; i--) {
+        const s = statues[i];
+        const dx = s.x - hero.x;
+        const dz = s.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > range + s.r) continue;
+        let diff = Math.abs(Math.atan2(dz, dx) - angle);
+        diff = Math.min(diff, Math.PI * 2 - diff);
+        if (diff < halfAngle + 0.15) {
+          damageStatue(s, i, dmg);
+          hitAny = true;
+        }
+      }
+
+      // Визуальный эффект — всегда, даже если никого не задело
+      spawnShotgunEffect(hero.x, hero.z, angle, range, halfAngle);
+
+      // Отдача — небольшой сдвиг камеры
+      cameraShake(0.18);
+    }
+  }
+
 
     // =====================================================
   //  МОЛОТ — раз в N секунд бьёт героя и делает его красивым
@@ -1042,6 +1200,86 @@ function useWeapons(dt) {
       }
     }
   }
+  
+
+    // =====================================================
+  //  БУМЕРАНГИ ЛИНЕЙКИ
+  // =====================================================
+  for (let i = rulerProjectiles.length - 1; i >= 0; i--) {
+    const b = rulerProjectiles[i];
+
+    // ---- Движение ----
+    if (b.phase === 'out') {
+      const step = b.speed * dt;
+      b.x += Math.cos(b.angle) * step;
+      b.z += Math.sin(b.angle) * step;
+      b.traveled += step;
+      if (b.traveled >= b.maxDistance) {
+        b.phase = 'back';
+        // Сбрасываем список — те же враги могут быть задеты на обратном пути
+        b.hitSet.clear();
+      }
+    } else {
+      // Возвращается к герою
+      const dx = hero.x - b.x;
+      const dz = hero.z - b.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.6) {
+        // Вернулся — убираем
+        scene.remove(b.mesh);
+        b.mesh.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+        rulerProjectiles.splice(i, 1);
+        continue;
+      }
+      b.x += (dx / d) * b.speed * dt;
+      b.z += (dz / d) * b.speed * dt;
+    }
+
+    // ---- Урон по врагам ----
+    const hitR = 0.9;
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      if (e.dying || e.flyingToBoss) continue;
+      if (b.hitSet.has(e)) continue;
+      const d = Math.hypot(e.x - b.x, e.z - b.z);
+      if (d < hitR + e.r) {
+        e.hp -= b.damage;
+        b.hitSet.add(e);
+        burst(e.x, e.z, 0xffd966);
+        if (e.hp <= 0) killEnemy(e, j);
+      }
+    }
+
+    // ---- Босс ----
+    if (boss.active && !b.hitSet.has(boss)) {
+      const d = Math.hypot(boss.x - b.x, boss.z - b.z);
+      if (d < hitR + boss.r) {
+        damageBoss(b.damage);
+        b.hitSet.add(boss);
+        burst(b.x, b.z, 0xffd966);
+      }
+    }
+
+    // ---- Статуи ----
+    for (let k = statues.length - 1; k >= 0; k--) {
+      const s = statues[k];
+      if (b.hitSet.has(s)) continue;
+      const d = Math.hypot(s.x - b.x, s.z - b.z);
+      if (d < hitR + s.r) {
+        damageStatue(s, k, b.damage);
+        b.hitSet.add(s);
+        burst(s.x, s.z, 0xffd966);
+      }
+    }
+
+    // ---- Анимация меша ----
+    b.spin += dt * 18;
+    b.mesh.position.set(b.x, 1.0 + Math.sin(b.spin * 1.4) * 0.1, b.z);
+    b.mesh.rotation.y = -b.angle + b.spin;
+    b.mesh.rotation.x = Math.sin(b.spin * 0.7) * 0.25;
   }
 
 
@@ -1103,6 +1341,7 @@ function useWeapons(dt) {
     if (weaponMeshes.pen) weaponMeshes.pen.rotation.y *= 0.8;
     if (weaponMeshes.ruler) weaponMeshes.ruler.rotation.y *= 0.8;
   }
+}
 
 function killEnemy(e, idx) {
   if (e.dying) return;
@@ -1143,8 +1382,73 @@ function spawnPenEffect(x, z, angle, len) {
   fade();
 }
 
+// =====================================================
+//  ЭФФЕКТ ЗАЛПА ДРОБОВИКА
+// =====================================================
+function spawnShotgunEffect(x, z, angle, range, halfAngle) {
+  // Расширяющийся конус.
+  // ВАЖНО: после rotation.x = -π/2 угол φ в геометрии даёт угол -φ в мире.
+  // Поэтому передаём -angle, чтобы сектор встал в реальном направлении.
+  const geo = new THREE.CircleGeometry(range, 32, -angle - halfAngle, halfAngle * 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffaa55, transparent: true, opacity: 0.85,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, 0.55, z);
+  m.rotation.x = -Math.PI / 2;
+  scene.add(m);
+
+  const start = performance.now();
+  function fade() {
+    const t = (performance.now() - start) / 320;
+    if (t >= 1) { scene.remove(m); return; }
+    mat.opacity = 0.85 * (1 - t);
+    m.scale.setScalar(1 + t * 0.15);
+    requestAnimationFrame(fade);
+  }
+  fade();
+
+  // Вспышка у дула — короткий яркий круг на старте
+  const flashGeo = new THREE.CircleGeometry(1.3, 20);
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffee88, transparent: true, opacity: 0.95,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.set(x + Math.cos(angle) * 1.5, 1.4, z + Math.sin(angle) * 1.5);
+  flash.rotation.x = -Math.PI / 2;
+  scene.add(flash);
+
+  const start2 = performance.now();
+  function animFlash() {
+    const t = (performance.now() - start2) / 180;
+    if (t >= 1) { scene.remove(flash); return; }
+    flashMat.opacity = 0.95 * (1 - t);
+    flash.scale.setScalar(1 + t * 0.8);
+    requestAnimationFrame(animFlash);
+  }
+  animFlash();
+
+  // Искры-соль разлетаются от героя в сторону конуса
+  for (let i = 0; i < 14; i++) {
+    const a = angle + (Math.random() - 0.5) * 2 * halfAngle;
+    const sp = 6 + Math.random() * 8;
+    const p = new THREE.Mesh(particleGeo, new THREE.MeshBasicMaterial({ color: 0xfff0c0 }));
+    p.position.set(x + Math.cos(angle) * 1.5, 1.4, z + Math.sin(angle) * 1.5);
+    p.userData = {
+      vx: Math.cos(a) * sp,
+      vz: Math.sin(a) * sp,
+      life: 0.4,
+    };
+    scene.add(p);
+    particles.push(p);
+  }
+}
+
+
 function spawnSlashEffect(x, z, angle, r, halfAngle) {
-  const geo = new THREE.CircleGeometry(r, 32, angle - halfAngle, halfAngle * 2);
+  const geo = new THREE.CircleGeometry(r, 32, -angle - halfAngle, halfAngle * 2);
   const mat = new THREE.MeshBasicMaterial({
     color: 0xffd966, transparent: true, opacity: 0.65,
     side: THREE.DoubleSide, depthWrite: false,
@@ -1606,6 +1910,7 @@ function killBoss() {
   for (let i = enemies.length - 1; i >= 0; i--) {
     if (enemies[i].isDog) {
       scene.remove(enemies[i].mesh);
+      removeDebugHitbox(enemies[i]);
       enemies.splice(i, 1);
     }
   }
@@ -2131,6 +2436,8 @@ addEventListener('keydown', e => {
   // Не реагируем на игровые клавиши, пока открыта модалка прокачки
   // (там свои обработчики — A/D/Enter/пробел)
   if (paused && overlay && overlay.classList.contains('active')) return;
+  // И при открытой модалке выбора оружия
+  if (paused && weaponOverlay && weaponOverlay.classList.contains('active')) return;
   // Также не реагируем, пока открыто ESC-меню
   const escEl = document.getElementById('escMenu');
   if (escEl && escEl.classList.contains('active')) return;
@@ -2523,6 +2830,7 @@ function breakStatue(s, idx) {
 
   scene.remove(s.mesh);
   scene.remove(s.hpBar);
+  removeStatueHitbox(s);
   statues.splice(idx, 1);
 }
 
@@ -3421,6 +3729,7 @@ function createDebugHitbox(e) {
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(e.x, 0.14, e.z);
+  ring.userData.__debugRing = true;
   scene.add(ring);
   e.debugHitbox = ring;
 }
@@ -3447,6 +3756,7 @@ function createBossHitbox() {
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(boss.x, 0.14, boss.z);
+  ring.userData.__debugRing = true;
   scene.add(ring);
   boss.debugHitbox = ring;
 }
@@ -3473,6 +3783,7 @@ function createStatueHitbox(s) {
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(s.x, 0.14, s.z);
+  ring.userData.__debugRing = true;
   scene.add(ring);
   s.debugHitbox = ring;
 }
@@ -3497,6 +3808,24 @@ function syncDebugHitboxes() {
       if (e.debugHitbox) e.debugHitbox.position.set(e.x, 0.14, e.z);
     } else if (e.debugHitbox) {
       removeDebugHitbox(e);
+    }
+  }
+
+  // Аварийная очистка «осиротевших» колец —
+  // если враг удалился без removeDebugHitbox, кольцо осталось в сцене.
+  // Пробегаем по сцене и удаляем debugHitbox-меши, не привязанные ни к кому.
+  const liveHitboxes = new Set();
+  for (const e of enemies) if (e.debugHitbox) liveHitboxes.add(e.debugHitbox);
+  for (const s of statues)  if (s.debugHitbox) liveHitboxes.add(s.debugHitbox);
+  if (boss.debugHitbox) liveHitboxes.add(boss.debugHitbox);
+  for (const p of projectiles) if (p.userData.debugHitbox) liveHitboxes.add(p.userData.debugHitbox);
+
+  for (let i = scene.children.length - 1; i >= 0; i--) {
+    const obj = scene.children[i];
+    if (obj.userData && obj.userData.__debugRing && !liveHitboxes.has(obj)) {
+      scene.remove(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
     }
   }
 
@@ -3534,6 +3863,7 @@ function syncDebugHitboxes() {
         const ring = new THREE.Mesh(geo, mat);
         ring.rotation.x = -Math.PI / 2;
         ring.position.set(p.position.x, 0.14, p.position.z);
+        ring.userData.__debugRing = true;
         scene.add(ring);
         p.userData.debugHitbox = ring;
       }
@@ -3558,6 +3888,62 @@ function clearAllDebugHitboxes() {
       p.userData.debugHitbox.material.dispose();
       p.userData.debugHitbox = null;
     }
+  }
+}
+
+// =====================================================
+//  ТАЙМЕР ЗАБЕГА
+// =====================================================
+const runTimerEl = (function createRunTimer() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #runTimer {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      background: rgba(20, 30, 40, 0.85);
+      border: 3px solid #6b5a3e;
+      border-radius: 14px;
+      padding: 6px 16px;
+      color: #ffd966;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-weight: 900;
+      font-size: 22px;
+      letter-spacing: 2px;
+      z-index: 25;
+      text-shadow: 2px 2px 0 #000;
+      box-shadow: 0 6px 0 #0b1114, 0 8px 16px rgba(0,0,0,0.6);
+      pointer-events: none;
+      min-width: 92px;
+      text-align: center;
+    }
+    @media (hover: none) and (pointer: coarse) {
+      #runTimer {
+        bottom: 180px;
+        left: 20px;
+        font-size: 16px;
+        padding: 4px 12px;
+        min-width: 76px;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'runTimer';
+  el.textContent = '00:00';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastRunTimerText = '';
+function updateRunTimer() {
+  const total = Math.floor(runTimer);
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  const text = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  if (text !== _lastRunTimerText) {
+    runTimerEl.textContent = text;
+    _lastRunTimerText = text;
   }
 }
 
@@ -3851,6 +4237,11 @@ const UPGRADES = [
     desc: '+18 к урону рогатки',
     condition: () => !!equippedWeapons.slingshot,
     apply: () => { weaponDamageFlat.slingshot += 18; } },
+
+  { ico: '🔫', name: 'Крупная соль',
+    desc: '+25 к урону дробовика',
+    condition: () => !!equippedWeapons.shotgun,
+    apply: () => { weaponDamageFlat.shotgun += 25; } },
 ];
 
 let jumpCooldownBonus = 0;
@@ -3865,6 +4256,10 @@ let levelUpSelectedIndex = 0;
 let levelUpCardElements = [];
 // Если true — в модалке прокачки мышь не работает, только клавиши
 let blockMouseOnLevelUp = false;
+
+// Навигация по карточкам выбора оружия
+let weaponSelectedIndex = 0;
+let weaponCardElements = [];   // 5 карточек оружия + кнопка «НЕ БРАТЬ»
 
 // Однократная инъекция стилей подсветки
 (function injectCardNavStyles() {
@@ -3926,7 +4321,76 @@ let blockMouseOnLevelUp = false;
       pointer-events: none;
       display: none;
     }
-    #levelup.no-mouse .mouse-blocked-hint {
+        #levelup.no-mouse .mouse-blocked-hint {
+      display: block;
+    }
+
+    /* ---------- Подсветка в модалке выбора оружия ---------- */
+    .weapon-card.selected, #skipWeapon.selected {
+      transform: translateY(-10px) !important;
+      border-color: #ffd966 !important;
+      box-shadow: 0 18px 0 #0b1114, 0 22px 40px #000, 0 0 30px rgba(255,217,102,0.9) !important;
+      position: relative;
+    }
+    #skipWeapon.selected {
+      background: rgba(255, 217, 102, 0.18) !important;
+      color: #ffd966 !important;
+      border-color: #ffd966 !important;
+    }
+    .weapon-card.selected::before, #skipWeapon.selected::before {
+      content: '▼';
+      position: absolute;
+      top: -26px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #ffd966;
+      font-size: 22px;
+      font-weight: 900;
+      text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255,217,102,0.9);
+      animation: cardNavArrow 0.7s ease-in-out infinite;
+    }
+
+    /* ---------- Блокировка мыши в выборе оружия ---------- */
+    #weaponchoice.no-mouse .weapon-card,
+    #weaponchoice.no-mouse #skipWeapon {
+      pointer-events: none !important;
+      cursor: default !important;
+    }
+    #weaponchoice.no-mouse .weapon-card:hover {
+      transform: none !important;
+      border-color: #6b5a3e !important;
+      box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000 !important;
+    }
+    #weaponchoice.no-mouse .weapon-card.selected {
+      transform: translateY(-10px) !important;
+      border-color: #ffd966 !important;
+      box-shadow: 0 18px 0 #0b1114, 0 22px 40px #000, 0 0 30px rgba(255,217,102,0.9) !important;
+    }
+    #weaponchoice.no-mouse #skipWeapon.selected {
+      background: rgba(255, 217, 102, 0.18) !important;
+      color: #ffd966 !important;
+      border-color: #ffd966 !important;
+    }
+    #weaponchoice .mouse-blocked-hint {
+      position: absolute;
+      top: 22px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(120, 30, 30, 0.85);
+      border: 2px solid #ff5555;
+      border-radius: 14px;
+      padding: 8px 18px;
+      color: #ffdddd;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      box-shadow: 0 0 18px rgba(255, 80, 80, 0.55);
+      text-shadow: 2px 2px 0 #000;
+      pointer-events: none;
+      display: none;
+      z-index: 5;
+    }
+    #weaponchoice.no-mouse .mouse-blocked-hint {
       display: block;
     }
   `;
@@ -3938,6 +4402,15 @@ function highlightLevelUpCard(index) {
   index = Math.max(0, Math.min(levelUpCardElements.length - 1, index));
   levelUpSelectedIndex = index;
   levelUpCardElements.forEach((el, i) => {
+    if (i === index) el.classList.add('selected');
+    else el.classList.remove('selected');
+  });
+}
+function highlightWeaponCard(index) {
+  if (weaponCardElements.length === 0) return;
+  index = Math.max(0, Math.min(weaponCardElements.length - 1, index));
+  weaponSelectedIndex = index;
+  weaponCardElements.forEach((el, i) => {
     if (i === index) el.classList.add('selected');
     else el.classList.remove('selected');
   });
@@ -4021,6 +4494,8 @@ function openWeaponChoice() {
   weaponOverlay.classList.add('active');
   weaponCardsEl.innerHTML = '';
 
+  weaponCardElements = [];
+
   for (const w of WEAPONS) {
     const owned = !!equippedWeapons[w.id];
     const lvl = owned ? equippedWeapons[w.id].level : 0;
@@ -4052,8 +4527,11 @@ function openWeaponChoice() {
       card.onclick = () => {
         giveWeapon(w.id);
         weaponOverlay.classList.remove('active');
+        weaponOverlay.classList.remove('no-mouse');
         paused = false;
         weaponChoiceQueue--;
+        weaponCardElements = [];
+        weaponSelectedIndex = 0;
         if (weaponChoiceQueue > 0) {
           setTimeout(openWeaponChoice, 60);
         } else if (levelUpQueue > 0) {
@@ -4063,13 +4541,40 @@ function openWeaponChoice() {
     }
 
     weaponCardsEl.appendChild(card);
+    weaponCardElements.push(card);
   }
+
+  // Последний элемент навигации — кнопка «НЕ БРАТЬ ОРУЖИЕ»
+  weaponCardElements.push(skipBtn);
+
+  // Подсказка «мышь заблокирована»
+  let blockedHint = weaponOverlay.querySelector('.mouse-blocked-hint');
+  if (!blockedHint) {
+    blockedHint = document.createElement('div');
+    blockedHint.className = 'mouse-blocked-hint';
+    blockedHint.textContent = '🖱 Мышь заблокирована · A / D + Enter · S — пропустить';
+    weaponOverlay.appendChild(blockedHint);
+  }
+
+  // Применяем режим блокировки мыши
+  if (blockMouseOnLevelUp) {
+    weaponOverlay.classList.add('no-mouse');
+  } else {
+    weaponOverlay.classList.remove('no-mouse');
+  }
+
+  // Подсвечиваем первую карточку
+  weaponSelectedIndex = 0;
+  highlightWeaponCard(0);
 }
 
 skipBtn.onclick = () => {
   weaponOverlay.classList.remove('active');
+  weaponOverlay.classList.remove('no-mouse');
   paused = false;
   weaponChoiceQueue--;
+  weaponCardElements = [];
+  weaponSelectedIndex = 0;
   if (weaponChoiceQueue > 0) {
     setTimeout(openWeaponChoice, 60);
   } else if (levelUpQueue > 0) {
@@ -4430,6 +4935,18 @@ function drawMinimap() {
     mmCtx.fill();
   }
 
+  // Бумеранги линейки
+  for (const b of rulerProjectiles) {
+    const mp = worldToMinimap(b.x, b.z);
+    mmCtx.beginPath();
+    mmCtx.arc(mp.x, mp.y, 2.5, 0, Math.PI * 2);
+    mmCtx.fillStyle = b.phase === 'out' ? '#ffdd66' : '#ffbb33';
+    mmCtx.fill();
+    mmCtx.strokeStyle = '#5a3a1a';
+    mmCtx.lineWidth = 1;
+    mmCtx.stroke();
+  }
+
   const hp2 = worldToMinimap(hero.x, hero.z);
   mmCtx.beginPath();
   mmCtx.arc(hp2.x, hp2.y, 4, 0, Math.PI * 2);
@@ -4471,6 +4988,8 @@ function loop(now) {
   last = now;
 
   if (gameActive && !paused) {
+    runTimer += dt;
+    updateRunTimer();
     updateJump(dt);
 
       // Движение героя
@@ -4618,12 +5137,14 @@ function loop(now) {
             burst(e.x, e.z, 0xff88ff);
             burst(e.x, e.z, 0x88ff44);
             scene.remove(e.mesh);
+            removeDebugHitbox(e);
             enemies.splice(i, 1);
             continue;
           }
         } else {
           // Босс умер — собака просто исчезает
           scene.remove(e.mesh);
+          removeDebugHitbox(e);
           enemies.splice(i, 1);
           continue;
         }
@@ -4790,6 +5311,9 @@ function reset() {
   xp = 0;
   xpNext = 30;
   kills = 0;
+  runTimer = 0;
+  _lastRunTimerText = '';
+  updateRunTimer();
 
     // Применяем базовые статы выбранного персонажа (или дефолты)
   if (selectedCharacterId) {
@@ -4827,11 +5351,13 @@ function reset() {
   weaponDamageFlat.bag = 0;
   weaponDamageFlat.ruler = 0;
   weaponDamageFlat.slingshot = 0;
+  weaponDamageFlat.shotgun = 0;
    // У молота нет бонусов урона — карточки усиления к нему не относятся
   weaponTimers.pen = 0;
   weaponTimers.ruler = 0;
   weaponTimers.slingshot = 0;
   weaponTimers.hammer = 0;
+  weaponTimers.shotgun = 0;
   heroTransformTimer = 0;
   heroTransformMaxDuration = 1;
   heroTransformDamageMult = 1.0;
@@ -4871,6 +5397,15 @@ function reset() {
 
   projectiles.forEach(p => scene.remove(p));
   projectiles.length = 0;
+
+  rulerProjectiles.forEach(b => {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  });
+  rulerProjectiles.length = 0;
 
   zones.forEach(z => scene.remove(z.group));
   zones.length = 0;
@@ -5466,15 +6001,77 @@ function createEscapeMenu() {
       letter-spacing: 1px;
     }
 
-    .esc-hint b {
+        .esc-hint b {
       color: #ffd966;
+    }
+
+    /* ---------- Слайдер громкости ---------- */
+    .esc-slider-row {
+      cursor: default;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      padding: 14px 16px;
+    }
+    .esc-slider-row:hover {
+      border-color: #3a4a5a;
+    }
+    .esc-slider-label {
+      text-align: center;
+      font-size: 15px;
+      color: #ffd966;
+    }
+    .esc-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #escMusicVol {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 8px;
+      border-radius: 6px;
+      background: linear-gradient(to right, #ffd966 0%, #ffd966 15%, #1a2630 15%, #1a2630 100%);
+      outline: none;
+      cursor: pointer;
+      box-shadow: inset 0 2px 4px #000;
+    }
+    #escMusicVol::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffee88, #b88832);
+      border: 3px solid #5a3a1a;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+    }
+    #escMusicVol::-moz-range-thumb {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffee88, #b88832);
+      border: 3px solid #5a3a1a;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+    }
+    .esc-slider-value {
+      font-size: 14px;
+      font-weight: 900;
+      color: #ffd966;
+      min-width: 44px;
+      text-align: right;
+      letter-spacing: 1px;
+      text-shadow: 2px 2px 0 #000;
     }
   `;
   document.head.appendChild(style);
 
   const overlay = document.createElement('div');
   overlay.id = 'escMenu';
-  overlay.innerHTML = `
+    overlay.innerHTML = `
     <div class="esc-panel">
       <h2>ПАУЗА</h2>
       <label class="esc-row">
@@ -5485,6 +6082,15 @@ function createEscapeMenu() {
         <input type="checkbox" id="escBlockMouse">
         <span class="esc-label">Блокировать мышь при выборе улучшения</span>
       </label>
+
+      <div class="esc-row esc-slider-row">
+        <span class="esc-label esc-slider-label">🎵 Громкость музыки</span>
+        <div class="esc-slider-wrap">
+          <input type="range" id="escMusicVol" min="0" max="100" step="1" value="15">
+          <span class="esc-slider-value" id="escMusicVolVal">15%</span>
+        </div>
+      </div>
+
       <div class="esc-hint">Нажмите <b>ESC</b>, чтобы продолжить</div>
     </div>
   `;
@@ -5492,8 +6098,16 @@ function createEscapeMenu() {
 
   const checkbox = document.getElementById('escHitboxes');
   const checkboxMouse = document.getElementById('escBlockMouse');
+  const musicSlider = document.getElementById('escMusicVol');
+  const musicSliderValue = document.getElementById('escMusicVolVal');
   let menuOpen = false;
   let savedPausedState = false;
+
+  function updateSliderBackground(val) {
+    const pct = Math.max(0, Math.min(100, val));
+    musicSlider.style.background =
+      `linear-gradient(to right, #ffd966 0%, #ffd966 ${pct}%, #1a2630 ${pct}%, #1a2630 100%)`;
+  }
 
   function openMenu() {
     menuOpen = true;
@@ -5501,6 +6115,10 @@ function createEscapeMenu() {
     paused = true;
     checkbox.checked = debugShowHitboxes;
     checkboxMouse.checked = blockMouseOnLevelUp;
+    const volPct = Math.round(bgMusicVolume * 100);
+    musicSlider.value = volPct;
+    musicSliderValue.textContent = volPct + '%';
+    updateSliderBackground(volPct);
     overlay.classList.add('active');
   }
 
@@ -5516,14 +6134,39 @@ function createEscapeMenu() {
 
   checkboxMouse.addEventListener('change', () => {
     blockMouseOnLevelUp = checkboxMouse.checked;
-    // Если модалка прокачки сейчас открыта — применить сразу
+    // Применяем ко всем открытым модалкам сразу
     if (overlay.classList.contains('active')) {
-      if (blockMouseOnLevelUp) {
-        overlay.classList.add('no-mouse');
-      } else {
-        overlay.classList.remove('no-mouse');
-      }
+      if (blockMouseOnLevelUp) overlay.classList.add('no-mouse');
+      else overlay.classList.remove('no-mouse');
     }
+    if (weaponOverlay.classList.contains('active')) {
+      if (blockMouseOnLevelUp) weaponOverlay.classList.add('no-mouse');
+      else weaponOverlay.classList.remove('no-mouse');
+    }
+  });
+
+    // Слайдер громкости музыки
+  function applyMusicVolume(pct) {
+    pct = Math.max(0, Math.min(100, pct));
+    bgMusicVolume = pct / 100;
+    bgMusic.volume = bgMusicVolume;
+    musicSliderValue.textContent = pct + '%';
+    updateSliderBackground(pct);
+    try {
+      localStorage.setItem('bgMusicVolume', bgMusicVolume.toString());
+    } catch (e) {}
+  }
+
+  musicSlider.addEventListener('input', () => {
+    applyMusicVolume(parseInt(musicSlider.value, 10));
+    // Пробуждаем музыку, если пользователь ещё её не слышал —
+    // двигая слайдер, он точно взаимодействует с игрой
+    tryStartBgMusic();
+  });
+
+  // Клик по дорожке слайдера — обновляем значение
+  musicSlider.addEventListener('change', () => {
+    applyMusicVolume(parseInt(musicSlider.value, 10));
   });
 
   // Клик по фону — закрыть
@@ -5558,30 +6201,77 @@ function createEscapeMenu() {
 // =====================================================
 (function initCardKeyboardNav() {
   addEventListener('keydown', e => {
-    // Работает только когда открыта модалка прокачки
-    if (!overlay.classList.contains('active')) return;
-    if (levelUpCardElements.length === 0) return;
+    // ============ МОДАЛКА ПРОКАЧКИ ============
+    if (overlay.classList.contains('active') && levelUpCardElements.length > 0) {
+      const c = e.code;
 
-    const c = e.code;
-
-    if (c === 'KeyA' || c === 'ArrowLeft') {
-      e.preventDefault();
-      highlightLevelUpCard(levelUpSelectedIndex - 1);
-    } else if (c === 'KeyD' || c === 'ArrowRight') {
-      e.preventDefault();
-      highlightLevelUpCard(levelUpSelectedIndex + 1);
-    } else if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
-      e.preventDefault();
-      const card = levelUpCardElements[levelUpSelectedIndex];
-      if (card && card.onclick) card.onclick();
-    } else if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3') {
-      // Быстрый выбор карточки по номеру (1/2/3)
-      e.preventDefault();
-      const num = parseInt(c.replace('Digit', ''), 10) - 1;
-      if (num >= 0 && num < levelUpCardElements.length) {
-        const card = levelUpCardElements[num];
-        if (card && card.onclick) card.onclick();
+      if (c === 'KeyA' || c === 'ArrowLeft') {
+        e.preventDefault();
+        highlightLevelUpCard(levelUpSelectedIndex - 1);
+        return;
       }
+      if (c === 'KeyD' || c === 'ArrowRight') {
+        e.preventDefault();
+        highlightLevelUpCard(levelUpSelectedIndex + 1);
+        return;
+      }
+      if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
+        e.preventDefault();
+        const card = levelUpCardElements[levelUpSelectedIndex];
+        if (card && card.onclick) card.onclick();
+        return;
+      }
+      if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3') {
+        e.preventDefault();
+        const num = parseInt(c.replace('Digit', ''), 10) - 1;
+        if (num >= 0 && num < levelUpCardElements.length) {
+          const card = levelUpCardElements[num];
+          if (card && card.onclick) card.onclick();
+        }
+        return;
+      }
+      return;
+    }
+
+    // ============ МОДАЛКА ВЫБОРА ОРУЖИЯ ============
+    if (weaponOverlay.classList.contains('active') && weaponCardElements.length > 0) {
+      const c = e.code;
+
+      if (c === 'KeyA' || c === 'ArrowLeft') {
+        e.preventDefault();
+        highlightWeaponCard(weaponSelectedIndex - 1);
+        return;
+      }
+      if (c === 'KeyD' || c === 'ArrowRight') {
+        e.preventDefault();
+        highlightWeaponCard(weaponSelectedIndex + 1);
+        return;
+      }
+      if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
+        e.preventDefault();
+        const el = weaponCardElements[weaponSelectedIndex];
+        if (el && el.onclick) el.onclick();
+        return;
+      }
+      // 1–5 — быстрое оружие по номеру
+      if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3' ||
+          c === 'Digit4' || c === 'Digit5') {
+        e.preventDefault();
+        const num = parseInt(c.replace('Digit', ''), 10) - 1;
+        // Длины weaponCardElements - 1 = 5 (карточек оружия), skipBtn — вне диапазона
+        if (num >= 0 && num < weaponCardElements.length - 1) {
+          const el = weaponCardElements[num];
+          if (el && el.onclick) el.onclick();
+        }
+        return;
+      }
+      // S — пропустить
+      if (c === 'KeyS') {
+        e.preventDefault();
+        if (skipBtn.onclick) skipBtn.onclick();
+        return;
+      }
+      return;
     }
   });
 })();
