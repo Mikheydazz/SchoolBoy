@@ -1995,8 +1995,11 @@ function updateZoneHUD() {
 // =====================================================
 
 // =====================================================
-//  МЫШЬ — прицел для Колобка
+//  ПРИЦЕЛ ДЛЯ КОЛОБКА — мышь + тач
 // =====================================================
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+let mobileAimAngle = null;   // угол, заданный тапом по экрану (сбрасывается джойстиком)
+
 const mouseNDC = new THREE.Vector2(0, 0);
 const mouseRaycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -2013,10 +2016,37 @@ function updateMouseWorld() {
   mouseRaycaster.ray.intersectPlane(groundPlane, mouseWorld);
 }
 
-// Угол от героя к курсору мыши
-function getMouseAimAngle() {
+// Угол от героя к произвольной экранной точке (для тапа на мобиле)
+function getAimAngleAtScreen(cx, cy) {
+  mouseNDC.x = (cx / innerWidth) * 2 - 1;
+  mouseNDC.y = -(cy / innerHeight) * 2 + 1;
   updateMouseWorld();
   return Math.atan2(mouseWorld.z - hero.z, mouseWorld.x - hero.x);
+}
+
+// Универсальный расчёт угла прицела Колобка:
+//   - джойстик ведёт направление (приоритет)
+//   - иначе — последний тап по экрану
+//   - на десктопе — мышь
+function computeRollerAimAngle() {
+  const joyMag = Math.hypot(mobileInput.mx, mobileInput.mz);
+
+  if (joyMag > 0.15) {
+    // Активно двигаемся — целимся по джойстику, сбрасываем прицел тапа
+    mobileAimAngle = null;
+    return Math.atan2(mobileInput.mz, mobileInput.mx);
+  }
+
+  if (mobileAimAngle !== null) {
+    return mobileAimAngle;
+  }
+
+  if (!isTouchDevice) {
+    return getMouseAimAngle();
+  }
+
+  // Иначе — оставляем текущий угол (не двигаем)
+  return hero.attackAngle;
 }
 
 const keys = {
@@ -3623,9 +3653,9 @@ function loop(now) {
     hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
     hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
     heroGroup.position.set(hero.x, hero.height, hero.z);
-        // Колобок: прицел всегда следует за мышью (для индикатора сектора)
+        // Колобок: прицел — от джойстика, тапа или мыши
     if (currentCharacter && currentCharacter.isRoller) {
-      hero.attackAngle = getMouseAimAngle();
+      hero.attackAngle = computeRollerAimAngle();
     }
 
         // Анимация текущего персонажа
@@ -4322,10 +4352,46 @@ function createMobileControls() {
     btnJump.classList.remove('pressed');
   });
 
-  // Отключаем скролл/зум жестами на всей странице для мобилы
+   // Отключаем скролл/зум жестами на всей странице для мобилы
   document.addEventListener('touchmove', e => {
     if (e.touches.length > 1) e.preventDefault();
   }, { passive: false });
+
+  // ---------- Тап/свайп по пустому месту экрана — задаёт прицел ----------
+  function isTapOnUI(cx, cy) {
+    const el = document.elementFromPoint(cx, cy);
+    if (!el) return false;
+    return !!el.closest('#mobileControls, #minimap, #restart, #hud, #bossHud, ' +
+                       '#levelup, #weaponchoice, #gameover, #cheatPanel, ' +
+                       '#cheatToggle, #charSelect, #zoneAlert');
+  }
+
+  function handleAimTouch(cx, cy) {
+    if (!currentCharacter || !currentCharacter.isRoller) return;
+    if (!gameActive || paused) return;
+    if (isTapOnUI(cx, cy)) return;
+    // Наводим сектор в точку тапа
+    mobileAimAngle = getAimAngleAtScreen(cx, cy);
+    // Обновляем сразу, чтобы удар (если сработает в этом кадре) уже бил в правильную сторону
+    hero.attackAngle = mobileAimAngle;
+  }
+
+  document.addEventListener('touchstart', e => {
+    for (const t of e.changedTouches) {
+      // Правая половина экрана — наведение. Левая — джойстик, не трогаем.
+      if (t.clientX > innerWidth * 0.35) {
+        handleAimTouch(t.clientX, t.clientY);
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    for (const t of e.changedTouches) {
+      if (t.clientX > innerWidth * 0.35) {
+        handleAimTouch(t.clientX, t.clientY);
+      }
+    }
+  }, { passive: true });
 }
 
 // =====================================================
