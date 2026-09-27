@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 import { CHARACTERS } from './characters.js';
 
 // =====================================================
@@ -15,6 +17,33 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
+
+// =====================================================
+//  ПРЕДЗАГРУЗКА МОДЕЛИ УРУРУ
+// =====================================================
+let ururuModel = null;       // сюда ляжет заготовка (prototype)
+let ururuModelLoaded = false;
+
+(function preloadUruru() {
+  const loader = new GLTFLoader();
+  loader.load(
+    './models/ururu.glb',
+    gltf => {
+      ururuModel = gltf.scene;
+      ururuModel.traverse(o => {
+        if (o.isMesh) {
+          o.castShadow = true;
+          o.receiveShadow = true;
+        }
+      });
+      ururuModelLoaded = true;
+    },
+    undefined,
+    err => {
+      console.error('[Уруру] не удалось загрузить models/ururu.glb:', err);
+    }
+  );
+})();
 
 // =====================================================
 //  СВЕТ
@@ -493,6 +522,7 @@ const weaponTimers = {
 //  СОСТОЯНИЕ ПРЕВРАЩЕНИЯ (от молота)
 // =====================================================
 let heroTransformTimer = 0;
+let heroTransformMaxDuration = 1;   // длительность текущего баффа — для шкалы
 let heroTransformSpeedMult = 1.3;
 let heroTransformJumpMult = 1.3;
 let heroTransformDamageMult = 1.0;
@@ -924,6 +954,7 @@ function useWeapons(dt) {
           def.baseDamageMult + hammerStacks * def.stackMultBonus);
 
         heroTransformTimer = dur;
+        heroTransformMaxDuration = dur;
         heroTransformSpeedMult = sMul;
         heroTransformJumpMult = jMul;
         heroTransformDamageMult = dMul;
@@ -1078,11 +1109,16 @@ function killEnemy(e, idx) {
   e.dying = true;
   e.dyingTimer = 0.25;
   if (e.isDog) score += 5;
+  else if (e.isUruru) score += 75;
   else if (e.isTeacher) score += 100;
   else score += 10;
   kills++;
   spawnXPOrb(e.x, e.z, e.xpValue);
-  burst(e.x, e.z, e.isDog ? 0x8a5a2a : (e.isTeacher ? 0x333333 : e.type.color));
+  burst(e.x, e.z,
+    e.isDog     ? 0x8a5a2a :
+    e.isUruru   ? 0xaa66cc :
+    e.isTeacher ? 0x333333 :
+                  e.type.color);
 }
 
 function spawnPenEffect(x, z, angle, len) {
@@ -2092,6 +2128,13 @@ const keys = {
 const mobileInput = { mx: 0, mz: 0 };
 
 addEventListener('keydown', e => {
+  // Не реагируем на игровые клавиши, пока открыта модалка прокачки
+  // (там свои обработчики — A/D/Enter/пробел)
+  if (paused && overlay && overlay.classList.contains('active')) return;
+  // Также не реагируем, пока открыто ESC-меню
+  const escEl = document.getElementById('escMenu');
+  if (escEl && escEl.classList.contains('active')) return;
+
   const c = e.code;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(c)) {
     e.preventDefault();
@@ -2611,11 +2654,100 @@ function makeTeacherMesh() {
   return group;
 }
 
+// =====================================================
+//  МЕШ УРУРУ (из внешней модели)
+// =====================================================
+function makeUruruMesh() {
+  const group = new THREE.Group();
+
+  if (ururuModelLoaded && ururuModel) {
+    // SkeletonUtils.clone корректно клонирует SkinnedMesh и кости.
+    // Без него копия остаётся «привязанной» к костям оригинала,
+    // и модель визуально не двигается вместе с группой.
+    const clone = skeletonClone(ururuModel);
+    clone.traverse(o => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        o.frustumCulled = false;   // skinned-меши нельзя отсекать по bbox
+      }
+      // Гарантируем, что клон обновляет свою матрицу каждый кадр
+      o.matrixAutoUpdate = true;
+    });
+
+        // Разворот модели. Если лежит — меняйте X_ROT/Y_ROT/Z_ROT
+    const URURU_ROT_X = 0;   // ← основной параметр
+    const URURU_ROT_Y = 0;
+    const URURU_ROT_Z = 0;
+    clone.rotation.x = URURU_ROT_X;
+    clone.rotation.y = URURU_ROT_Y;
+    clone.rotation.z = URURU_ROT_Z;
+
+    // Авто-масштаб до высоты 2.5 юнита
+    const box = new THREE.Box3().setFromObject(clone);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    if (size.y > 0.001) {
+      const scale = 2.5 / size.y;
+      clone.scale.multiplyScalar(scale);
+    }
+
+        // Прижимаем низ модели к земле.
+    // Для skinned-модели Box3 даёт bind-pose, поэтому вместо авто-центрирования
+    // по XZ используем ручные смещения.
+    const boxAfter = new THREE.Box3().setFromObject(clone);
+    clone.position.y -= boxAfter.min.y;
+    clone.position.x += URURU_XZ_OFFSET_X;
+    clone.position.z += URURU_XZ_OFFSET_Z;
+
+    group.add(clone);
+  } else {
+    // Fallback на случай, если модель ещё не загрузилась
+    const mat = new THREE.MeshLambertMaterial({ color: 0xaa66cc });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 1.0, 6, 12), mat);
+    body.position.y = 1.1;
+    body.castShadow = true;
+    group.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 10), mat);
+    head.position.y = 2.05;
+    head.castShadow = true;
+    group.add(head);
+  }
+
+  return group;
+}
+
+// Проверка: может ли Уруру заспавниться
+function canSpawnUruru() {
+  return level >= 10 && ururuModelLoaded;
+}
+
+// Вероятность спавна Уруру вместо обычного врага
+function getUruruProbability(lvl) {
+  if (lvl < 10) return 0;
+  if (lvl < 15) return 0.04;   // 4% — редко
+  if (lvl < 20) return 0.06;   // 6%
+  return 0.08;                 // 8%
+}
+
+const URURU_Y_OFFSET = -1.65;
+const URURU_RADIUS = 1.6;
+const URURU_XZ_OFFSET_X = 0;
+const URURU_XZ_OFFSET_Z = 0;
+// =====================================================
+//  ОТЛАДКА: показывать хитбоксы всех врагов
+//  Управляется из меню ESC
+// =====================================================
+let debugShowHitboxes = false;
+
 function spawnEnemy() {
   const tier = Math.min(1 + Math.floor(level / 3), 5);
 
+  // Уруру — приоритетная проверка (спавнится редко)
+  const isUruru = Math.random() < getUruruProbability(level);
+
   // Определяем, будет ли это учитель
-  const isTeacher = Math.random() < getTeacherProbability(level);
+  const isTeacher = !isUruru && Math.random() < getTeacherProbability(level);
 
   // Точка спавна общая для всех
   let x, z, attempts = 0;
@@ -2626,6 +2758,44 @@ function spawnEnemy() {
     z = hero.z + Math.sin(angle) * dist;
     attempts++;
   } while (attempts < 10 && isInsideHouse(x, z, 1.5));
+
+  // ============================================================
+  //  УРУРУ — редкий элитный враг
+  // ============================================================
+  if (isUruru) {
+        const mesh = makeUruruMesh();
+    mesh.position.set(x, 0, z);
+
+    // Небольшой случайный поворот, чтобы все клоны не смотрели одинаково
+    mesh.rotation.y = Math.random() * Math.PI * 2;
+
+    scene.add(mesh);
+
+    // Чуть слабее учителя
+    const baseHp     = 12 + tier * 12;
+    const baseDamage = 22 + tier * 6;
+    const baseSpeed  = 2.2 + tier * 0.3;
+    const baseXp     = (4 + tier * 2) + 3;
+
+    const maxHp = Math.round(baseHp * 2.5);   // у учителя ×3.0
+
+    enemies.push({
+      mesh, x, z,
+      type: { name: 'УРУРУ', color: 0xaa66cc, r: URURU_RADIUS },
+      isUruru: true,
+      isTeacher: false,
+      hp: maxHp, maxHp,
+      speed: baseSpeed * 1.35,
+      damage: Math.round(baseDamage * 2.5),
+      r: URURU_RADIUS,
+      xpValue: Math.round(baseXp * 2.5),     // у учителя ×3.0
+      dying: false,
+      dyingTimer: 0,
+      kbX: 0, kbZ: 0,
+      wobble: Math.random() * Math.PI * 2,
+    });
+    return;
+  }
 
   // ============================================================
   //  УЧИТЕЛЬ
@@ -3227,6 +3397,294 @@ const kolobokHudEl = (function createKolobokHud() {
   return el;
 })();
 
+// =====================================================
+//  ОТЛАДОЧНЫЕ ХИТБОКСЫ
+// =====================================================
+function getHitboxColor(e) {
+  if (e.isUruru)   return 0xff00ff;   // пурпурный
+  if (e.isTeacher) return 0x00ff66;   // зелёный
+  if (e.isDog)     return 0xff8800;   // оранжевый
+  return 0xff3333;                    // красный — учебники
+}
+
+function createDebugHitbox(e) {
+  if (!e || e.debugHitbox) return;
+  const r = e.r || 1;
+  const ringGeo = new THREE.RingGeometry(Math.max(0.05, r - 0.06), r, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: getHitboxColor(e),
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(e.x, 0.14, e.z);
+  scene.add(ring);
+  e.debugHitbox = ring;
+}
+
+function removeDebugHitbox(e) {
+  if (!e || !e.debugHitbox) return;
+  scene.remove(e.debugHitbox);
+  e.debugHitbox.geometry.dispose();
+  e.debugHitbox.material.dispose();
+  e.debugHitbox = null;
+}
+
+function createBossHitbox() {
+  if (boss.debugHitbox) return;
+  const r = boss.r;
+  const ringGeo = new THREE.RingGeometry(Math.max(0.1, r - 0.1), r, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xff00ff,
+    transparent: true,
+    opacity: 0.75,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(boss.x, 0.14, boss.z);
+  scene.add(ring);
+  boss.debugHitbox = ring;
+}
+
+function removeBossHitbox() {
+  if (!boss.debugHitbox) return;
+  scene.remove(boss.debugHitbox);
+  boss.debugHitbox.geometry.dispose();
+  boss.debugHitbox.material.dispose();
+  boss.debugHitbox = null;
+}
+
+function createStatueHitbox(s) {
+  if (s.debugHitbox) return;
+  const r = s.r;
+  const ringGeo = new THREE.RingGeometry(Math.max(0.1, r - 0.06), r, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(s.x, 0.14, s.z);
+  scene.add(ring);
+  s.debugHitbox = ring;
+}
+
+function removeStatueHitbox(s) {
+  if (!s.debugHitbox) return;
+  scene.remove(s.debugHitbox);
+  s.debugHitbox.geometry.dispose();
+  s.debugHitbox.material.dispose();
+  s.debugHitbox = null;
+}
+
+function syncDebugHitboxes() {
+  // Враги
+  for (const e of enemies) {
+    if (e.dying) {
+      removeDebugHitbox(e);
+      continue;
+    }
+    if (debugShowHitboxes) {
+      if (!e.debugHitbox) createDebugHitbox(e);
+      if (e.debugHitbox) e.debugHitbox.position.set(e.x, 0.14, e.z);
+    } else if (e.debugHitbox) {
+      removeDebugHitbox(e);
+    }
+  }
+
+  // Босс
+  if (boss.active) {
+    if (debugShowHitboxes) {
+      if (!boss.debugHitbox) createBossHitbox();
+      if (boss.debugHitbox) boss.debugHitbox.position.set(boss.x, 0.14, boss.z);
+    } else if (boss.debugHitbox) {
+      removeBossHitbox();
+    }
+  } else if (boss.debugHitbox) {
+    removeBossHitbox();
+  }
+
+  // Статуи
+  for (const s of statues) {
+    if (debugShowHitboxes) {
+      if (!s.debugHitbox) createStatueHitbox(s);
+    } else if (s.debugHitbox) {
+      removeStatueHitbox(s);
+    }
+  }
+
+  // Снаряды рогатки игрока
+  for (const p of projectiles) {
+    if (debugShowHitboxes) {
+      if (!p.userData.debugHitbox) {
+        const r = 0.3;
+        const geo = new THREE.RingGeometry(0.22, r, 16);
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0xffff00, transparent: true, opacity: 0.85,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+        const ring = new THREE.Mesh(geo, mat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(p.position.x, 0.14, p.position.z);
+        scene.add(ring);
+        p.userData.debugHitbox = ring;
+      }
+      p.userData.debugHitbox.position.set(p.position.x, 0.14, p.position.z);
+    } else if (p.userData.debugHitbox) {
+      scene.remove(p.userData.debugHitbox);
+      p.userData.debugHitbox.geometry.dispose();
+      p.userData.debugHitbox.material.dispose();
+      p.userData.debugHitbox = null;
+    }
+  }
+}
+
+function clearAllDebugHitboxes() {
+  for (const e of enemies) removeDebugHitbox(e);
+  removeBossHitbox();
+  for (const s of statues) removeStatueHitbox(s);
+  for (const p of projectiles) {
+    if (p.userData.debugHitbox) {
+      scene.remove(p.userData.debugHitbox);
+      p.userData.debugHitbox.geometry.dispose();
+      p.userData.debugHitbox.material.dispose();
+      p.userData.debugHitbox = null;
+    }
+  }
+}
+
+// =====================================================
+//  ШКАЛА БАФФА МОЛОТА
+// =====================================================
+const hammerBuffBar = (function createHammerBuffBar() {
+  const style = document.createElement('style');
+  style.textContent = `
+     #hammerBuffBar {
+      position: fixed;
+      top: 50%;
+      left: 14px;
+      transform: translateY(-50%) translateX(-12px);
+      width: 220px;
+      background: rgba(20, 30, 40, 0.85);
+      border: 3px solid #ffd966;
+      border-radius: 20px;
+      padding: 6px 14px 8px;
+      z-index: 65;
+      display: none;
+      box-shadow: 0 0 20px rgba(255, 217, 102, 0.5), 0 6px 0 #4a3a1a;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      color: #ffe9a0;
+      text-shadow: 2px 2px 0 #000;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+    }
+    #hammerBuffBar.visible {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
+    #hammerBuffBar .hbLabel {
+      font-size: 13px;
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+    }
+    #hammerBuffBar .hbTrack {
+      width: 100%;
+      height: 12px;
+      background: #3a2a10;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: inset 0 2px 5px #000;
+      position: relative;
+    }
+    #hammerBuffBar .hbFill {
+      display: block;
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #ffb340, #ffd966, #ffee88);
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(255, 217, 102, 0.9);
+      transition: width 0.1s linear;
+    }
+    #hammerBuffBar .hbTime {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 9px;
+      color: #1a0e00;
+      text-shadow: none;
+      letter-spacing: 1px;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const el = document.createElement('div');
+  el.id = 'hammerBuffBar';
+  el.innerHTML = `
+    <div class="hbLabel">🔨 КРАСОТА АКТИВНА</div>
+    <div class="hbTrack">
+      <span class="hbFill"></span>
+      <span class="hbTime"></span>
+    </div>
+  `;
+  document.body.appendChild(el);
+
+  return {
+    el,
+    fill: el.querySelector('.hbFill'),
+    time: el.querySelector('.hbTime'),
+  };
+})();
+
+let _hammerBarVisible = false;
+function updateHammerBuffBar() {
+  const active = heroTransformTimer > 0;
+
+  if (!active) {
+    if (_hammerBarVisible) {
+      hammerBuffBar.el.classList.remove('visible');
+      // Полностью прячем после анимации
+      setTimeout(() => {
+        if (heroTransformTimer <= 0) hammerBuffBar.el.style.display = 'none';
+      }, 220);
+      _hammerBarVisible = false;
+    }
+    return;
+  }
+
+  const ratio = Math.max(0, Math.min(1, heroTransformTimer / heroTransformMaxDuration));
+  hammerBuffBar.fill.style.width = (ratio * 100) + '%';
+  hammerBuffBar.time.textContent = heroTransformTimer.toFixed(1) + 'с';
+
+  // Меняем цвет при малом остатке
+  if (ratio < 0.25) {
+    hammerBuffBar.fill.style.background = 'linear-gradient(90deg, #ff5533, #ff8866)';
+  } else if (ratio < 0.5) {
+    hammerBuffBar.fill.style.background = 'linear-gradient(90deg, #ffaa33, #ffcc66)';
+  } else {
+    hammerBuffBar.fill.style.background = 'linear-gradient(90deg, #ffb340, #ffd966, #ffee88)';
+  }
+
+  if (!_hammerBarVisible) {
+    hammerBuffBar.el.style.display = 'block';
+    // Заставляем браузер пересчитать layout перед добавлением класса
+    void hammerBuffBar.el.offsetWidth;
+    hammerBuffBar.el.classList.add('visible');
+    _hammerBarVisible = true;
+  }
+}
+
 let _lastKolobokHudText = '';
 function updateKolobokHud() {
   const isRoller = currentCharacter && currentCharacter.isRoller;
@@ -3400,12 +3858,106 @@ let jumpCooldownBonus = 0;
 const overlay = document.getElementById('levelup');
 const cardsEl = document.getElementById('cards');
 
+// =====================================================
+//  НАВИГАЦИЯ ПО КАРТОЧКАМ КЛАВИАТУРОЙ (A/D + Enter)
+// =====================================================
+let levelUpSelectedIndex = 0;
+let levelUpCardElements = [];
+// Если true — в модалке прокачки мышь не работает, только клавиши
+let blockMouseOnLevelUp = false;
+
+// Однократная инъекция стилей подсветки
+(function injectCardNavStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    .card.selected {
+      transform: translateY(-10px) !important;
+      border-color: #ffd966 !important;
+      box-shadow: 0 18px 0 #0b1114, 0 22px 40px #000, 0 0 30px rgba(255,217,102,0.9) !important;
+      position: relative;
+    }
+       .card.selected::before {
+      content: '▼';
+      position: absolute;
+      top: -26px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #ffd966;
+      font-size: 22px;
+      font-weight: 900;
+      text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255,217,102,0.9);
+      animation: cardNavArrow 0.7s ease-in-out infinite;
+    }
+    @keyframes cardNavArrow {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50%      { transform: translateX(-50%) translateY(5px); }
+    }
+
+    /* Режим «мышь заблокирована» в модалке прокачки */
+    #levelup.no-mouse .card {
+      pointer-events: none !important;
+      cursor: default !important;
+    }
+    #levelup.no-mouse .card:hover {
+      transform: none !important;
+      border-color: #6b5a3e !important;
+      box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000 !important;
+    }
+    #levelup.no-mouse .card.selected {
+      transform: translateY(-10px) !important;
+      border-color: #ffd966 !important;
+      box-shadow: 0 18px 0 #0b1114, 0 22px 40px #000, 0 0 30px rgba(255,217,102,0.9) !important;
+    }
+    #levelup .mouse-blocked-hint {
+      position: absolute;
+      top: 22px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(120, 30, 30, 0.85);
+      border: 2px solid #ff5555;
+      border-radius: 14px;
+      padding: 8px 18px;
+      color: #ffdddd;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      box-shadow: 0 0 18px rgba(255, 80, 80, 0.55);
+      text-shadow: 2px 2px 0 #000;
+      pointer-events: none;
+      display: none;
+    }
+    #levelup.no-mouse .mouse-blocked-hint {
+      display: block;
+    }
+  `;
+  document.head.appendChild(style);
+})();
+
+function highlightLevelUpCard(index) {
+  if (levelUpCardElements.length === 0) return;
+  index = Math.max(0, Math.min(levelUpCardElements.length - 1, index));
+  levelUpSelectedIndex = index;
+  levelUpCardElements.forEach((el, i) => {
+    if (i === index) el.classList.add('selected');
+    else el.classList.remove('selected');
+  });
+}
+
 function openLevelUp() {
   paused = true;
+  // Если открыто ESC-меню — сначала закроем его
+  const escEl = document.getElementById('escMenu');
+  if (escEl && escEl.classList.contains('active')) {
+    escEl.classList.remove('active');
+    if (window.__escMenu && window.__escMenu.forceClose) {
+      window.__escMenu.forceClose();
+    }
+  }
   overlay.classList.add('active');
-  // Оставляем только карточки, у которых нет condition или condition === true
   const pool = UPGRADES.filter(u => !u.condition || u.condition());
   cardsEl.innerHTML = '';
+
+  levelUpCardElements = [];
 
   for (let i = 0; i < 3 && pool.length; i++) {
     const idx = Math.floor(Math.random() * pool.length);
@@ -3421,8 +3973,11 @@ function openLevelUp() {
       u.apply();
       updateHud();
       overlay.classList.remove('active');
+      overlay.classList.remove('no-mouse');
       paused = false;
       levelUpQueue--;
+      levelUpCardElements = [];
+      levelUpSelectedIndex = 0;
       if (weaponChoiceQueue > 0) {
         setTimeout(openWeaponChoice, 60);
       } else if (levelUpQueue > 0) {
@@ -3430,7 +3985,28 @@ function openLevelUp() {
       }
     };
     cardsEl.appendChild(card);
+    levelUpCardElements.push(card);
   }
+
+  // Подсказка «мышь заблокирована»
+  let blockedHint = overlay.querySelector('.mouse-blocked-hint');
+  if (!blockedHint) {
+    blockedHint = document.createElement('div');
+    blockedHint.className = 'mouse-blocked-hint';
+    blockedHint.textContent = '🖱 Мышь заблокирована · используйте A / D + Enter';
+    overlay.appendChild(blockedHint);
+  }
+
+  // Применяем режим блокировки мыши
+  if (blockMouseOnLevelUp) {
+    overlay.classList.add('no-mouse');
+  } else {
+    overlay.classList.remove('no-mouse');
+  }
+
+  // Выделяем первую карточку
+  levelUpSelectedIndex = 0;
+  highlightLevelUpCard(0);
 }
 
 // =====================================================
@@ -3817,7 +4393,18 @@ function drawMinimap() {
     if (e.dying) continue;
     const p = worldToMinimap(e.x, e.z);
     mmCtx.beginPath();
-    if (e.isTeacher) {
+        if (e.isUruru) {
+      // Уруру — фиолетовый ромб
+      mmCtx.save();
+      mmCtx.translate(p.x, p.y);
+      mmCtx.rotate(Math.PI / 4);
+      mmCtx.fillStyle = '#aa66cc';
+      mmCtx.fillRect(-3, -3, 6, 6);
+      mmCtx.strokeStyle = '#ffffff';
+      mmCtx.lineWidth = 1.5;
+      mmCtx.strokeRect(-3, -3, 6, 6);
+      mmCtx.restore();
+    } else if (e.isTeacher) {
       // Учителя — крупнее, чёрные с белым контуром
       mmCtx.arc(p.x, p.y, 3.6, 0, Math.PI * 2);
       mmCtx.fillStyle = '#000000';
@@ -3972,6 +4559,8 @@ function loop(now) {
     updateHammerSlam(dt);
     updateKolobokBerserk(dt);
     updateKolobokHud();
+    updateHammerBuffBar();
+    syncDebugHitboxes();
     useWeapons(dt);
     updateXpOrbs(dt);
 
@@ -4054,6 +4643,7 @@ function loop(now) {
 
         if (e.dyingTimer <= 0) {
           scene.remove(e.mesh);
+          removeDebugHitbox(e);
           enemies.splice(i, 1);
         }
         continue;
@@ -4074,12 +4664,18 @@ function loop(now) {
       e.x = resolved.x;
       e.z = resolved.z;
 
-      if (e.isDog) {
+        if (e.isDog) {
         // Собака бежит по земле
         e.wobble += dt * 4;
         e.mesh.position.set(e.x, 0.05 + Math.abs(Math.sin(e.wobble * 3)) * 0.08, e.z);
         e.mesh.rotation.z = Math.sin(e.wobble * 3) * 0.06;
         e.mesh.lookAt(hero.x, e.mesh.position.y, hero.z);
+          } else if (e.isUruru) {
+        // Уруру ходит по земле, как учитель — лёгкое покачивание при шаге
+        const step = Math.abs(Math.sin(e.wobble * 1.4));
+        e.mesh.position.set(e.x, URURU_Y_OFFSET + step * 0.1, e.z);
+        e.mesh.rotation.z = Math.sin(e.wobble * 1.4) * 0.05;
+        e.mesh.rotation.y = Math.atan2(hero.x - e.x, hero.z - e.z);
       } else if (e.isTeacher) {
         // Учитель идёт с покачиванием
         const step = Math.abs(Math.sin(e.wobble * 1.5));
@@ -4140,6 +4736,9 @@ function loop(now) {
       for (let i = 0; i < Math.min(count, 5); i++) spawnEnemy();
     }
   }
+
+    // Синхронизация хитбоксов даже когда игра на паузе
+  syncDebugHitboxes();
 
   // Частицы
   for (let i = particles.length - 1; i >= 0; i--) {
@@ -4216,6 +4815,7 @@ function reset() {
     scene.remove(boss.mesh);
     scene.remove(boss.aura);
   }
+  removeBossHitbox();
   boss.active = false;
   boss.mesh = null;
   boss.aura = null;
@@ -4233,8 +4833,14 @@ function reset() {
   weaponTimers.slingshot = 0;
   weaponTimers.hammer = 0;
   heroTransformTimer = 0;
+  heroTransformMaxDuration = 1;
   heroTransformDamageMult = 1.0;
   hammerSwingTimer = 0;
+  _hammerBarVisible = false;
+  if (typeof hammerBuffBar !== 'undefined' && hammerBuffBar) {
+    hammerBuffBar.el.classList.remove('visible');
+    hammerBuffBar.el.style.display = 'none';
+  }
   hammerStacks = 0;
   hammerSlamCooldown = 0;
   lastAttack = 0;
@@ -4253,6 +4859,7 @@ function reset() {
   rebuildWeaponMeshes();
   updateWeaponHud();
 
+  clearAllDebugHitboxes();
   enemies.forEach(e => scene.remove(e.mesh));
   enemies.length = 0;
 
@@ -4271,6 +4878,12 @@ function reset() {
   statues.forEach(s => {
     scene.remove(s.mesh);
     scene.remove(s.hpBar);
+    if (s.debugHitbox) {
+      scene.remove(s.debugHitbox);
+      s.debugHitbox.geometry.dispose();
+      s.debugHitbox.material.dispose();
+      s.debugHitbox = null;
+    }
   });
   statues.length = 0;
 
@@ -4753,6 +5366,226 @@ paused = true;
 createCharacterSelect();
 requestAnimationFrame(loop);
 
+
+// =====================================================
+//  МЕНЮ ПАУЗЫ (ESC)
+// =====================================================
+function createEscapeMenu() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #escMenu {
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 14, 20, 0.78);
+      backdrop-filter: blur(6px);
+      z-index: 800;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Segoe UI', Arial, sans-serif;
+    }
+    #escMenu.active { display: flex; }
+
+    .esc-panel {
+      background: linear-gradient(160deg, #2a3a4a, #14202a);
+      border: 4px solid #6b5a3e;
+      border-radius: 24px;
+      padding: 26px 34px 22px;
+      min-width: 340px;
+      max-width: 90vw;
+      box-shadow: 0 14px 0 #0a1114, 0 20px 40px rgba(0,0,0,0.85);
+      text-align: center;
+      color: #ffeecc;
+    }
+
+    .esc-panel h2 {
+      color: #ffd966;
+      font-size: 32px;
+      letter-spacing: 4px;
+      margin: 0 0 20px;
+      text-shadow: 4px 4px 0 #3a2e1e;
+    }
+
+    .esc-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: rgba(15, 25, 32, 0.85);
+      border: 2px solid #3a4a5a;
+      border-radius: 14px;
+      padding: 12px 16px;
+      cursor: pointer;
+      user-select: none;
+      transition: 0.12s;
+      margin-bottom: 12px;
+    }
+    .esc-row:hover { border-color: #ffd966; }
+
+    .esc-row input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 26px;
+      height: 26px;
+      border: 3px solid #6b5a3e;
+      border-radius: 6px;
+      background: #1a2630;
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+      transition: 0.12s;
+    }
+    .esc-row input[type="checkbox"]:checked {
+      background: #ffd966;
+      border-color: #ffd966;
+      box-shadow: 0 0 12px rgba(255,217,102,0.7);
+    }
+    .esc-row input[type="checkbox"]:checked::after {
+      content: '✓';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -55%);
+      color: #1a2630;
+      font-size: 20px;
+      font-weight: 900;
+    }
+
+    .esc-label {
+      font-size: 16px;
+      font-weight: 700;
+      color: #cfdde6;
+      text-align: left;
+      flex: 1;
+      letter-spacing: 0.5px;
+    }
+
+    .esc-hint {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #8a9aaa;
+      letter-spacing: 1px;
+    }
+
+    .esc-hint b {
+      color: #ffd966;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'escMenu';
+  overlay.innerHTML = `
+    <div class="esc-panel">
+      <h2>ПАУЗА</h2>
+      <label class="esc-row">
+        <input type="checkbox" id="escHitboxes">
+        <span class="esc-label">Показывать хитбоксы врагов</span>
+      </label>
+      <label class="esc-row">
+        <input type="checkbox" id="escBlockMouse">
+        <span class="esc-label">Блокировать мышь при выборе улучшения</span>
+      </label>
+      <div class="esc-hint">Нажмите <b>ESC</b>, чтобы продолжить</div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const checkbox = document.getElementById('escHitboxes');
+  const checkboxMouse = document.getElementById('escBlockMouse');
+  let menuOpen = false;
+  let savedPausedState = false;
+
+  function openMenu() {
+    menuOpen = true;
+    savedPausedState = paused;
+    paused = true;
+    checkbox.checked = debugShowHitboxes;
+    checkboxMouse.checked = blockMouseOnLevelUp;
+    overlay.classList.add('active');
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    overlay.classList.remove('active');
+    paused = savedPausedState;
+  }
+
+    checkbox.addEventListener('change', () => {
+    debugShowHitboxes = checkbox.checked;
+  });
+
+  checkboxMouse.addEventListener('change', () => {
+    blockMouseOnLevelUp = checkboxMouse.checked;
+    // Если модалка прокачки сейчас открыта — применить сразу
+    if (overlay.classList.contains('active')) {
+      if (blockMouseOnLevelUp) {
+        overlay.classList.add('no-mouse');
+      } else {
+        overlay.classList.remove('no-mouse');
+      }
+    }
+  });
+
+  // Клик по фону — закрыть
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) closeMenu();
+  });
+
+  addEventListener('keydown', e => {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      if (menuOpen) {
+        closeMenu();
+      } else if (gameActive) {
+        openMenu();
+      }
+    }
+  });
+
+  // Экспортируем для отладки
+  window.__escMenu = {
+    openMenu,
+    closeMenu,
+    isOpen: () => menuOpen,
+    forceClose: () => {
+      if (menuOpen) closeMenu();
+    }
+  };
+}
+
+// =====================================================
+//  УПРАВЛЕНИЕ КАРТОЧКАМИ С КЛАВИАТУРЫ
+// =====================================================
+(function initCardKeyboardNav() {
+  addEventListener('keydown', e => {
+    // Работает только когда открыта модалка прокачки
+    if (!overlay.classList.contains('active')) return;
+    if (levelUpCardElements.length === 0) return;
+
+    const c = e.code;
+
+    if (c === 'KeyA' || c === 'ArrowLeft') {
+      e.preventDefault();
+      highlightLevelUpCard(levelUpSelectedIndex - 1);
+    } else if (c === 'KeyD' || c === 'ArrowRight') {
+      e.preventDefault();
+      highlightLevelUpCard(levelUpSelectedIndex + 1);
+    } else if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
+      e.preventDefault();
+      const card = levelUpCardElements[levelUpSelectedIndex];
+      if (card && card.onclick) card.onclick();
+    } else if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3') {
+      // Быстрый выбор карточки по номеру (1/2/3)
+      e.preventDefault();
+      const num = parseInt(c.replace('Digit', ''), 10) - 1;
+      if (num >= 0 && num < levelUpCardElements.length) {
+        const card = levelUpCardElements[num];
+        if (card && card.onclick) card.onclick();
+      }
+    }
+  });
+})();
+
 // =====================================================
 //  ЧИТ-ПАНЕЛЬ ДЛЯ БЕТА-ТЕСТА
 //  ⚠ УДАЛИТЬ ПЕРЕД РЕЛИЗОМ
@@ -5081,5 +5914,6 @@ function setLevel(target) {
   }
 }
 
-// Запуск чит-панели
+// Запуск чит-панели и меню паузы
 createCheatPanel();
+createEscapeMenu();
