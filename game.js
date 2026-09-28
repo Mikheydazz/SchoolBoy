@@ -4439,6 +4439,15 @@ const hammerBuffBar = (function createHammerBuffBar() {
 
 let _hammerBarVisible = false;
 function updateHammerBuffBar() {
+  // На мобиле шкала баффа не нужна — состояние показано на иконке оружия
+  if (mobileControlsCreated) {
+    if (_hammerBarVisible) {
+      hammerBuffBar.el.classList.remove('visible');
+      hammerBuffBar.el.style.display = 'none';
+      _hammerBarVisible = false;
+    }
+    return;
+  }
   const active = heroTransformTimer > 0;
 
   if (!active) {
@@ -4706,6 +4715,13 @@ const gasHudEl = (function createGasHud() {
 
 let _lastGasHudText = '';
 function updateGasHud() {
+  if (mobileControlsCreated) {
+    if (gasHudEl.style.display !== 'none') {
+      gasHudEl.style.display = 'none';
+      _lastGasHudText = '';
+    }
+    return;
+  }
   const isRoller = currentCharacter && currentCharacter.isRoller;
   const isShishkun = currentCharacter && currentCharacter.doubleSector;
   if (isRoller || isShishkun || level < GAS_UNLOCK_LEVEL) {
@@ -5126,6 +5142,13 @@ const luckHudEl = (function createLuckHud() {
 
 let _lastLuckHudText = '';
 function updateLuckHud() {
+  if (mobileControlsCreated) {
+    if (luckHudEl.style.display !== 'none') {
+      luckHudEl.style.display = 'none';
+      _lastLuckHudText = '';
+    }
+    return;
+  }
   const isShishkun = currentCharacter && currentCharacter.doubleSector;
   if (!isShishkun || level < LUCK_UNLOCK_LEVEL) {
     if (luckHudEl.style.display !== 'none') {
@@ -5159,9 +5182,116 @@ function updateLuckHud() {
   }
 }
 
+// =====================================================
+//  МОБИЛЬНАЯ КНОПКА СПОСОБНОСТИ — иконка + кулдаун + таймер
+// =====================================================
+function updateMobileAbilityButton() {
+  const btn = document.getElementById('btnBerserk');
+  if (!btn) return;
+
+  let state = 'hidden';
+  let total = 1;
+  let remaining = 0;
+  let icon = '🔥';
+
+  if (currentCharacter) {
+    if (currentCharacter.isRoller) {
+      icon = '🔥';
+      if (level >= KOLOBOK_BERSERK_UNLOCK_LEVEL) {
+        if (kolobokBerserkActive) {
+          state = 'active';
+          total = KOLOBOK_BERSERK_DURATION;
+          remaining = kolobokBerserkTimer;
+        } else if (kolobokBerserkCooldown > 0) {
+          state = 'cooldown';
+          total = KOLOBOK_BERSERK_COOLDOWN;
+          remaining = kolobokBerserkCooldown;
+        } else {
+          state = 'ready';
+        }
+      }
+    } else if (currentCharacter.doubleSector) {
+      icon = '🚗';
+      if (level >= LUCK_UNLOCK_LEVEL) {
+        if (lucksMaxingActive) {
+          state = 'active';
+          total = LUCK_CUTSCENE_DURATION + LUCK_DRIVING_DURATION;
+          if (lucksMaxingPhase === 'cutscene') {
+            remaining = (LUCK_CUTSCENE_DURATION - lucksMaxingTimer) + LUCK_DRIVING_DURATION;
+          } else {
+            remaining = LUCK_DRIVING_DURATION - lucksMaxingTimer;
+          }
+        } else if (lucksMaxingCooldown > 0) {
+          state = 'cooldown';
+          total = LUCK_COOLDOWN;
+          remaining = lucksMaxingCooldown;
+        } else {
+          state = 'ready';
+        }
+      }
+    } else {
+      icon = '☣';
+      if (level >= GAS_UNLOCK_LEVEL) {
+        if (gasActive) {
+          state = 'active';
+          total = GAS_DURATION;
+          remaining = gasTimer;
+        } else if (gasCooldown > 0) {
+          state = 'cooldown';
+          total = GAS_COOLDOWN;
+          remaining = gasCooldown;
+        } else {
+          state = 'ready';
+        }
+      }
+    }
+  }
+
+  const iconEl = btn.querySelector('.mbIcon');
+  const timerEl = btn.querySelector('.mbTimer');
+
+  if (iconEl && iconEl.textContent !== icon) iconEl.textContent = icon;
+
+  btn.classList.remove('ready', 'cooldown', 'active', 'show-timer');
+
+  if (state === 'hidden') {
+    btn.style.display = 'none';
+    return;
+  }
+
+  btn.style.display = 'flex';
+
+  const txt = remaining < 10
+    ? remaining.toFixed(1)
+    : String(Math.ceil(remaining));
+
+  if (state === 'ready') {
+    btn.classList.add('ready');
+    if (timerEl) timerEl.textContent = '';
+    btn.style.setProperty('--remain', 0);
+  } else if (state === 'cooldown') {
+    btn.classList.add('cooldown', 'show-timer');
+    if (timerEl) timerEl.textContent = txt;
+    const pct = Math.max(0, Math.min(100, (remaining / total) * 100));
+    btn.style.setProperty('--remain', pct.toFixed(2));
+  } else if (state === 'active') {
+    btn.classList.add('active', 'show-timer');
+    if (timerEl) timerEl.textContent = txt;
+    btn.style.setProperty('--remain', 0);
+  }
+}
+
 
 let _lastKolobokHudText = '';
 function updateKolobokHud() {
+  // На мобиле состояние показывается на круглой кнопке
+  if (mobileControlsCreated) {
+    if (kolobokHudEl.style.display !== 'none') {
+      kolobokHudEl.style.display = 'none';
+      _lastKolobokHudText = '';
+    }
+    return;
+  }
   const isRoller = currentCharacter && currentCharacter.isRoller;
   if (!isRoller || level < KOLOBOK_BERSERK_UNLOCK_LEVEL) {
     if (kolobokHudEl.style.display !== 'none') {
@@ -6821,12 +6951,21 @@ renderer.domElement.addEventListener('mousedown', e => {
 // ПКМ и СКМ можно использовать позже под другие действия
 renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 
+
+// =====================================================
+//  ФЛАГ: мобильное управление активно
+//  Используется, чтобы на телефоне скрывать десктопные HUD
+// =====================================================
+let mobileControlsCreated = false;
+
 // =====================================================
 //  МОБИЛЬНОЕ УПРАВЛЕНИЕ (джойстик + кнопки)
 // =====================================================
 function createMobileControls() {
   const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
   if (!isTouch) return;
+
+  mobileControlsCreated = true;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -6897,17 +7036,17 @@ function createMobileControls() {
       box-shadow: 0 1px 0 rgba(0,0,0,0.55), 0 4px 8px rgba(0,0,0,0.6);
     }
     #btnAttack {
-      bottom: 36px;
+      bottom: 30px;
       right: 30px;
-      width: 96px;
-      height: 96px;
+      width: 88px;
+      height: 88px;
       background: radial-gradient(circle at 35% 30%, #ff8080, #a02020);
     }
     #btnJump {
-      bottom: 150px;
-      right: 48px;
-      width: 82px;
-      height: 82px;
+      bottom: 30px;
+      right: 130px;
+      width: 76px;
+      height: 76px;
       background: radial-gradient(circle at 35% 30%, #88ccff, #2a5a9a);
     }
 
@@ -6948,39 +7087,106 @@ function createMobileControls() {
     /* ---------- Адаптация остального UI ---------- */
     @media (hover: none) and (pointer: coarse) {
       #minimap {
-        width: 130px !important;
-        height: 130px !important;
+        width: 110px !important;
+        height: 110px !important;
         top: 8px !important;
         right: 8px !important;
         bottom: auto !important;
         left: auto !important;
       }
       #hud {
-        padding-right: 150px;
+        padding-right: 130px;
       }
       #hint {
         display: none !important;
       }
       #restart {
-        top: 148px;
+        top: 126px;
         bottom: auto;
         left: auto;
         right: 8px;
         transform: none;
-        font-size: 12px;
-        padding: 6px 14px;
+        font-size: 11px;
+        padding: 5px 12px;
       }
       #restart:active {
         transform: translateY(3px);
       }
       #btnBerserk {
-        bottom: 250px;
-        right: 60px;
-        width: 72px;
-        height: 72px;
+        bottom: 120px;
+        right: 80px;
+        width: 68px;
+        height: 68px;
         background: radial-gradient(circle at 35% 30%, #ffbb44, #b84010);
         display: none;
+        flex-direction: column;
+        gap: 0;
+        overflow: visible;
+        position: absolute;
       }
+    }
+          /* ---------- Состояния кнопки способности ---------- */
+    #btnBerserk .mbIcon {
+      font-size: 30px;
+      line-height: 1;
+      z-index: 2;
+      position: relative;
+      filter: drop-shadow(2px 2px 0 #000);
+      transition: font-size 0.1s ease;
+    }
+    #btnBerserk .mbTimer {
+      font-size: 13px;
+      font-weight: 900;
+      line-height: 1;
+      color: #fff;
+      text-shadow: 2px 2px 0 #000, -1px -1px 0 #000;
+      z-index: 2;
+      position: relative;
+      display: none;
+      margin-top: 1px;
+      letter-spacing: 0.5px;
+    }
+    #btnBerserk.show-timer .mbTimer { display: block; }
+    #btnBerserk.show-timer .mbIcon { font-size: 22px; }
+
+    #btnBerserk .mbRing {
+      position: absolute;
+      inset: -3px;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    #btnBerserk.cooldown .mbRing {
+      opacity: 1;
+      background: conic-gradient(
+        rgba(0, 0, 0, 0.72) calc(var(--remain, 100) * 3.6deg),
+        transparent 0
+      );
+    }
+    #btnBerserk.cooldown {
+      filter: brightness(0.75) saturate(0.8);
+    }
+
+    #btnBerserk.ready {
+      animation: btnReadyPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes btnReadyPulse {
+      0%, 100% {
+        box-shadow: 0 6px 0 rgba(0,0,0,0.55), 0 12px 22px rgba(0,0,0,0.6),
+                    0 0 18px rgba(255, 217, 102, 0.55);
+      }
+      50% {
+        box-shadow: 0 6px 0 rgba(0,0,0,0.55), 0 12px 22px rgba(0,0,0,0.6),
+                    0 0 34px rgba(255, 217, 102, 1);
+      }
+    }
+
+    #btnBerserk.active {
+      filter: brightness(1.15);
+      box-shadow: 0 6px 0 rgba(0,0,0,0.55), 0 12px 22px rgba(0,0,0,0.6),
+                  0 0 34px rgba(120, 255, 80, 0.95);
     }
   `;
   document.head.appendChild(style);
@@ -6991,7 +7197,11 @@ function createMobileControls() {
     <div id="joyBase"><div id="joyKnob"></div></div>
     <div class="mobileBtn" id="btnAttack">💥</div>
     <div class="mobileBtn" id="btnJump">⤴</div>
-    <div class="mobileBtn" id="btnBerserk">🔥</div>
+    <div class="mobileBtn" id="btnBerserk">
+      <span class="mbRing"></span>
+      <span class="mbIcon">🔥</span>
+      <span class="mbTimer"></span>
+    </div>
     <button id="btnMenu" aria-label="Меню">☰</button>
   `;
   document.body.appendChild(container);
@@ -7170,25 +7380,8 @@ function createMobileControls() {
     btnBerserk.classList.remove('pressed');
   }, { passive: false });
 
-  // Показываем кнопку только Колобку с 5-го уровня
-  setInterval(() => {
-    let show = false;
-    let icon = '🔥';
-    if (currentCharacter) {
-      if (currentCharacter.isRoller) {
-        show = level >= KOLOBOK_BERSERK_UNLOCK_LEVEL;
-        icon = '🔥';
-      } else if (currentCharacter.doubleSector) {
-        show = level >= LUCK_UNLOCK_LEVEL;
-        icon = '🚗';
-      } else {
-        show = level >= GAS_UNLOCK_LEVEL;
-        icon = '☣';
-      }
-    }
-    btnBerserk.textContent = icon;
-    btnBerserk.style.display = show ? 'flex' : 'none';
-  }, 200);
+  // Обновляем состояние и вид кнопки способности 10 раз в секунду
+  setInterval(updateMobileAbilityButton, 100);
 
     // ---------- Кнопка меню (открывает ESC-паузу) ----------
   const btnMenu = document.getElementById('btnMenu');
