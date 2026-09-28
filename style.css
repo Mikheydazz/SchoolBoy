@@ -562,14 +562,47 @@ body {
 
 @media (hover: none) and (pointer: coarse), (max-width: 800px) {
   #bossHud {
-    top: 148px;                 /* под миникартой на мобиле */
-    width: calc(100vw - 24px);
-    max-width: calc(100vw - 24px);
-    padding: 6px 12px 8px;
-    gap: 5px;
-    border-width: 2px;
-    border-radius: 14px;
-    box-shadow: 0 0 18px rgba(200, 60, 200, 0.55), 0 5px 0 #2a082a;
+    top: auto;                    /* сбрасываем top */
+    bottom: 8px;                  /* прижимаем к самому низу */
+    left: 50%;
+    width: 200px;                 /* компактнее плашки зоны (14px шрифт, ~250px ширина) */
+    max-width: 60vw;
+    padding: 3px 8px 4px;
+    gap: 2px;
+    border-width: 1.5px;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(200, 60, 200, 0.45), 0 2px 0 #2a082a;
+    background: rgba(40, 10, 50, 0.85);
+  }
+
+  /* Шкала HP босса — тонкая */
+  #bossHud .bossBar {
+    height: 8px;
+    border-width: 1px;
+    border-radius: 5px;
+  }
+
+  /* Заголовок босса — маленький, но узнаваемый */
+  #bossHud .bossTitle {
+    font-size: 9px;
+    letter-spacing: 0.5px;
+    margin: 0;
+    line-height: 1;
+    text-shadow: 1px 1px 0 #2a082a, 0 0 4px rgba(255, 100, 255, 0.5);
+  }
+
+  /* Информация: HP и таймер в одну строку */
+  #bossHud .bossInfo {
+    font-size: 8px;
+    margin: 0;
+    padding: 0 2px;
+    line-height: 1;
+    justify-content: space-between;
+  }
+
+  #bossHud .bossInfo b {
+    font-size: 9px;
+    letter-spacing: 0;
   }
 }
 
