@@ -6830,11 +6830,14 @@ function createMobileControls() {
 
   const style = document.createElement('style');
   style.textContent = `
-    #mobileControls {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 80;
+    /* При активной чит-панели прячем элементы управления */
+    body.cheat-open #mobileControls {
+      display: none;
+    }
+        /* Кнопка меню поверх всего, но не мешает при открытых модалках */
+    body.cheat-open #btnMenu,
+    #charSelect ~ #mobileControls #btnMenu {
+      display: none;
     }
 
     /* ---------- Джойстик ---------- */
@@ -6908,6 +6911,40 @@ function createMobileControls() {
       background: radial-gradient(circle at 35% 30%, #88ccff, #2a5a9a);
     }
 
+      /* ---------- Кнопка меню (мобила) ---------- */
+    #btnMenu {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: rgba(20, 30, 40, 0.85);
+      border: 2px solid #ffd966;
+      color: #ffd966;
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      pointer-events: auto;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 90;
+      box-shadow: 0 4px 0 #0b1114, 0 6px 12px rgba(0, 0, 0, 0.6);
+      font-family: inherit;
+      transition: 0.05s linear;
+    }
+    #btnMenu:active {
+      transform: translateY(3px);
+      box-shadow: 0 1px 0 #0b1114, 0 3px 6px rgba(0, 0, 0, 0.6);
+    }
+
+    /* ---------- Адаптация остального UI ---------- */
+    @media (hover: none) and (pointer: coarse) {
+
     /* ---------- Адаптация остального UI ---------- */
     @media (hover: none) and (pointer: coarse) {
       #minimap {
@@ -6955,6 +6992,7 @@ function createMobileControls() {
     <div class="mobileBtn" id="btnAttack">💥</div>
     <div class="mobileBtn" id="btnJump">⤴</div>
     <div class="mobileBtn" id="btnBerserk">🔥</div>
+    <button id="btnMenu" aria-label="Меню">☰</button>
   `;
   document.body.appendChild(container);
 
@@ -7096,7 +7134,7 @@ function createMobileControls() {
     if (!el) return false;
     return !!el.closest('#mobileControls, #minimap, #restart, #hud, #bossHud, ' +
                        '#levelup, #weaponchoice, #gameover, #cheatPanel, ' +
-                       '#cheatToggle, #charSelect, #zoneAlert');
+                       '#cheatToggle, #cheatClose, #btnMenu, #charSelect, #zoneAlert');
   }
 
   function handleAimTouch(cx, cy) {
@@ -7151,6 +7189,18 @@ function createMobileControls() {
     btnBerserk.textContent = icon;
     btnBerserk.style.display = show ? 'flex' : 'none';
   }, 200);
+
+    // ---------- Кнопка меню (открывает ESC-паузу) ----------
+  const btnMenu = document.getElementById('btnMenu');
+  btnMenu.addEventListener('touchstart', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.__escMenu && window.__escMenu.isOpen && window.__escMenu.isOpen()) {
+      window.__escMenu.closeMenu();
+    } else if (window.__escMenu && window.__escMenu.openMenu) {
+      window.__escMenu.openMenu();
+    }
+  }, { passive: false });
 
   document.addEventListener('touchstart', e => {
     for (const t of e.changedTouches) {
@@ -7561,6 +7611,60 @@ function createEscapeMenu() {
 function createCheatPanel() {
   const style = document.createElement('style');
   style.textContent = `
+    /* ---------- Мобильная адаптация ---------- */
+    @media (hover: none) and (pointer: coarse), (max-width: 800px) {
+      #cheatPanel {
+        top: 6px;
+        left: 6px;
+        right: 6px;
+        width: auto;
+        max-width: none;
+        max-height: 60vh;
+        overflow-y: auto;
+        font-size: 11px;
+        padding: 8px 10px;
+        border-radius: 10px;
+      }
+      #cheatPanel h3 {
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      #cheatPanel .row {
+        margin-bottom: 4px;
+        gap: 4px;
+      }
+      #cheatPanel label {
+        flex: 0 0 60px;
+        font-size: 11px;
+      }
+      #cheatPanel input {
+        padding: 3px 5px;
+        font-size: 11px;
+      }
+      #cheatPanel button {
+        padding: 3px 6px;
+        font-size: 10px;
+      }
+      #cheatPanel .info {
+        font-size: 9px;
+        margin-top: 4px;
+      }
+      #cheatToggle {
+        top: 8px;
+        left: 8px;
+        padding: 3px 8px;
+        font-size: 11px;
+      }
+      /* Скрыть при открытой панели миникарту и мобильные кнопки,
+         чтобы не мешали */
+      body.cheat-open #minimap,
+      body.cheat-open #mobileControls,
+      body.cheat-open #runTimer {
+        opacity: 0.15;
+        pointer-events: none;
+      }
+    }
+
     #cheatPanel {
       position: fixed;
       top: 12px;
@@ -7652,6 +7756,44 @@ function createCheatPanel() {
     }
     #cheatToggle:hover { background: rgba(255, 217, 102, 0.15); }
     #cheatToggle.hidden { display: none; }
+
+    /* ---------- Кнопка закрытия чит-панели ---------- */
+    #cheatClose {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border-radius: 8px;
+      background: #5a1a1a;
+      border: 1px solid #a04040;
+      color: #ffdddd;
+      font-size: 14px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: 0.1s;
+    }
+    #cheatClose:hover {
+      background: #8a2a2a;
+      border-color: #ff5555;
+    }
+    #cheatClose:active {
+      transform: translateY(1px);
+    }
+    @media (hover: none) and (pointer: coarse), (max-width: 800px) {
+      #cheatClose {
+        width: 30px;
+        height: 30px;
+        top: 4px;
+        right: 4px;
+        font-size: 15px;
+      }
+    }
   `;
   document.head.appendChild(style);
 
@@ -7663,6 +7805,7 @@ function createCheatPanel() {
   const panel = document.createElement('div');
   panel.id = 'cheatPanel';
   panel.innerHTML = `
+    <button id="cheatClose" title="Закрыть (F2)">✕</button>
     <h3>⚙ ЧИТ-ПАНЕЛЬ [F2]</h3>
 
     <div class="row">
@@ -7729,6 +7872,8 @@ function createCheatPanel() {
     panelOpen = !panelOpen;
     panel.classList.toggle('open', panelOpen);
     toggleBtn.classList.toggle('hidden', panelOpen);
+    // На мобиле — приглушаем игровой UI, чтобы чит-панель не мешалась
+    document.body.classList.toggle('cheat-open', panelOpen);
     if (panelOpen) refreshCheatValues();
   }
 
@@ -7810,6 +7955,11 @@ function createCheatPanel() {
     const old = document.getElementById('charSelect');
     if (old) old.remove();
     createCharacterSelect();
+  };
+
+  // ---------- Кнопка закрытия ----------
+  document.getElementById('cheatClose').onclick = () => {
+    if (panelOpen) togglePanel();
   };
 }
 

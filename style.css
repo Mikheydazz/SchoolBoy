@@ -304,6 +304,50 @@ body {
   backdrop-filter: blur(4px);
 }
 
+@media (hover: none) and (pointer: coarse), (max-width: 800px) {
+  #gameover {
+    gap: 12px;
+    padding: 20px 16px;
+  }
+  #gameover h1 {
+    font-size: 42px;
+    letter-spacing: 2px;
+    text-shadow:
+      0 0 12px rgba(255, 60, 40, 0.6),
+      3px 3px 0 #4a1010,
+      5px 5px 12px #000;
+  }
+  #gameover .subtitle {
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+  #gameover .stats {
+    gap: 10px;
+    margin-top: 4px;
+    margin-bottom: 10px;
+  }
+  #gameover .stat {
+    padding: 8px 14px;
+    min-width: 96px;
+    border-width: 2px;
+    border-radius: 14px;
+    box-shadow: 0 4px 0 #0b1114, 0 6px 12px rgba(0, 0, 0, 0.6);
+  }
+  #gameover .stat .label {
+    font-size: 10px;
+    letter-spacing: 0.5px;
+  }
+  #gameover .stat .value {
+    font-size: 22px;
+  }
+  #gameover button {
+    padding: 10px 28px;
+    font-size: 16px;
+    margin-top: 4px;
+    box-shadow: 0 5px 0 #8f6f3c, 0 7px 10px #000;
+  }
+}
+
 #gameover.active {
   display: flex;
   animation: fadeIn 0.35s ease-out;
@@ -454,6 +498,27 @@ body {
   animation: zonePulse 0.8s ease-in-out infinite;
 }
 
+@media (hover: none) and (pointer: coarse), (max-width: 800px) {
+  #zoneAlert {
+    top: 210px;                 /* под HUD босса, если он есть */
+    padding: 8px 16px;
+    border-radius: 14px;
+    font-size: 14px;
+    letter-spacing: 1px;
+    max-width: calc(100vw - 24px);
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
+    border-width: 2px;
+  }
+  #zoneAlert.danger {
+    box-shadow: 0 0 16px rgba(255, 60, 60, 0.75), 0 5px 0 #4a0808;
+  }
+  #zoneAlert.safe {
+    box-shadow: 0 0 16px rgba(60, 255, 60, 0.5), 0 5px 0 #084a08;
+  }
+}
+
 #zoneAlert.danger {
   background: rgba(120, 10, 10, 0.88);
   color: #ffd0d0;
@@ -495,6 +560,19 @@ body {
   font-family: inherit;
 }
 
+@media (hover: none) and (pointer: coarse), (max-width: 800px) {
+  #bossHud {
+    top: 148px;                 /* под миникартой на мобиле */
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    padding: 6px 12px 8px;
+    gap: 5px;
+    border-width: 2px;
+    border-radius: 14px;
+    box-shadow: 0 0 18px rgba(200, 60, 200, 0.55), 0 5px 0 #2a082a;
+  }
+}
+
 #bossHud.active {
   display: flex;
   animation: bossPulse 1.2s ease-in-out infinite;
@@ -511,6 +589,24 @@ body {
   letter-spacing: 3px;
   color: #ff88ff;
   text-shadow: 2px 2px 0 #2a082a, 0 0 10px rgba(255, 100, 255, 0.6);
+}
+
+@media (hover: none) and (pointer: coarse), (max-width: 800px) {
+  .bossTitle {
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    text-shadow: 1.5px 1.5px 0 #2a082a, 0 0 6px rgba(255, 100, 255, 0.6);
+  }
+  .bossBar {
+    height: 16px;
+    border-width: 1.5px;
+  }
+  .bossInfo {
+    font-size: 11px;
+  }
+  .bossInfo b {
+    font-size: 12px;
+  }
 }
 
 .bossBar {
