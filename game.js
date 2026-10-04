@@ -461,6 +461,16 @@ let quicksShieldCooldown = 0;
 let quicksInvulnTimer = 0;
 
 const quicksMissiles = [];             // активные ракеты
+const quicksFrostZones = [];           // морозные зоны после прыжковой атаки
+
+const QUICKS_FROST_MAX_RADIUS_BASE = 5.5;   // базовый радиус морозной зоны
+const QUICKS_FROST_MAX_RADIUS_PER_LVL = 0.35;
+const QUICKS_FROST_GROW_TIME = 1.1;         // сек до полного радиуса
+const QUICKS_FROST_LIFETIME = 5.0;          // сек жизни
+const QUICKS_FROST_SLOW = 0.55;             // 55% замедления
+const QUICKS_FROST_DPS_MULT = 0.35;         // урон/сек = stats.damage × 0.35
+const QUICKS_SHOCKWAVE_RADIUS_BONUS = 3.5;  // +3.5 к радиусу от базового прыжкового
+const QUICKS_SHOCKWAVE_PUSH = 26;           // сила отталкивания врагов
 
 // Визуальный шар щита
 const quicksShieldMesh = new THREE.Mesh(
@@ -1824,6 +1834,221 @@ function damageHero(amount) {
     showGameOver();
   }
   updateHud();
+}
+
+// =====================================================
+//  МОРОЗНАЯ ЗОНА КВИКСА
+// =====================================================
+function spawnQuicksFrostZone(x, z) {
+  const maxRadius = QUICKS_FROST_MAX_RADIUS_BASE + level * QUICKS_FROST_MAX_RADIUS_PER_LVL;
+
+  const group = new THREE.Group();
+
+  // Внутренняя заливка — лёгкий голубой круг
+  const innerGeo = new THREE.CircleGeometry(1, 40);
+  const innerMat = new THREE.MeshBasicMaterial({
+    color: 0xaaddff, transparent: true, opacity: 0.22,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const inner = new THREE.Mesh(innerGeo, innerMat);
+  inner.rotation.x = -Math.PI / 2;
+  inner.position.y = 0.08;
+  group.add(inner);
+
+  // Второе кольцо — более плотное, «ледяная кромка»
+  const ringGeo = new THREE.RingGeometry(0.92, 1.0, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0.75,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.10;
+  group.add(ring);
+
+  // Тонкие ледяные спицы внутри зоны (декоративные)
+  const spokes = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const spoke = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.14, 0.9),
+      new THREE.MeshBasicMaterial({
+        color: 0xbbeeff, transparent: true, opacity: 0.55,
+        side: THREE.DoubleSide, depthWrite: false,
+      })
+    );
+    spoke.rotation.x = -Math.PI / 2;
+    spoke.rotation.z = a;
+    spoke.position.set(Math.cos(a) * 0.5, 0.11, Math.sin(a) * 0.5);
+    group.add(spoke);
+    spokes.push({ mesh: spoke, angle: a });
+  }
+
+  group.position.set(x, 0, z);
+  scene.add(group);
+
+  quicksFrostZones.push({
+    x, z,
+    maxRadius,
+    currentRadius: 0.4,                                 // стартовый радиус маленький
+    growSpeed: maxRadius / QUICKS_FROST_GROW_TIME,      // растёт до max за GROW_TIME
+    damage: stats.damage * QUICKS_FROST_DPS_MULT,
+    slow: QUICKS_FROST_SLOW,
+    timer: QUICKS_FROST_LIFETIME,
+    life: QUICKS_FROST_LIFETIME,
+    mesh: group,
+    inner, ring, innerMat, ringMat,
+    spokes,
+    spin: 0,
+  });
+}
+
+function updateQuicksFrostZones(dt) {
+  // Сброс замедления перед пересчётом
+  for (const e of enemies) e._frostSlow = 0;
+
+  for (let i = quicksFrostZones.length - 1; i >= 0; i--) {
+    const z = quicksFrostZones[i];
+    z.timer -= dt;
+
+    // Медленное растекание
+    if (z.currentRadius < z.maxRadius) {
+      z.currentRadius = Math.min(z.maxRadius, z.currentRadius + z.growSpeed * dt);
+    }
+
+    // Визуал
+    const scale = z.currentRadius;
+    z.inner.scale.set(scale, scale, 1);
+    z.ring.scale.set(scale, scale, 1);
+
+    // Пульсация кольца
+    const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.035;
+    z.ring.scale.set(scale * pulse, scale * pulse, 1);
+
+    // Спицы вращаются по кругу и уезжают от центра вместе с ростом
+    z.spin += dt * 0.7;
+    for (let k = 0; k < z.spokes.length; k++) {
+      const s = z.spokes[k];
+      const a = s.angle + z.spin;
+      // Радиус расположения спицы — 60% от текущего радиуса зоны
+      const rPos = scale * 0.65;
+      s.mesh.position.set(Math.cos(a) * rPos, 0.11, Math.sin(a) * rPos);
+      s.mesh.rotation.z = a;
+    }
+
+    // Затухание к концу
+    const fadeStart = 1.2;
+    let alphaMul = 1;
+    if (z.timer < fadeStart) alphaMul = z.timer / fadeStart;
+    z.innerMat.opacity = 0.22 * alphaMul;
+    z.ringMat.opacity = 0.75 * alphaMul;
+    for (const s of z.spokes) {
+      s.mesh.material.opacity = 0.55 * alphaMul;
+    }
+
+    // Эффекты на врагов
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - z.x, e.z - z.z);
+      if (d < z.currentRadius + e.r) {
+        // Замедление — берём максимум из уже применённого
+        if (z.slow > (e._frostSlow || 0)) e._frostSlow = z.slow;
+
+        // Урон
+        e.hp -= z.damage * dt;
+        if (Math.random() < 0.10) burst(e.x, e.z, 0xaaddff);
+        if (e.hp <= 0) killEnemy(e, j);
+      }
+    }
+
+    // Босс
+    if (boss.active) {
+      const d = Math.hypot(boss.x - z.x, boss.z - z.z);
+      if (d < z.currentRadius + boss.r) {
+        damageBoss(z.damage * dt * 0.7);
+      }
+    }
+
+    // Убираем зону
+    if (z.timer <= 0) {
+      scene.remove(z.mesh);
+      z.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      quicksFrostZones.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
+//  ЭФФЕКТ УДАРНОЙ ВОЛНЫ КВИКСА
+// =====================================================
+function spawnQuicksShockwaveEffect(x, z, r) {
+  // Светло-голубое расширяющееся кольцо
+  const ringGeo = new THREE.RingGeometry(r * 0.5, r, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xaaeeff, transparent: true, opacity: 0.95,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.14, z);
+  scene.add(ring);
+
+  const start = performance.now();
+  function animRing() {
+    const t = (performance.now() - start) / 500;
+    if (t >= 1) { scene.remove(ring); return; }
+    const s = 1 + t * 0.6;
+    ring.scale.set(s, s, 1);
+    ringMat.opacity = 0.95 * (1 - t);
+    requestAnimationFrame(animRing);
+  }
+  animRing();
+
+  // Внутренняя волна — плотное яркое кольцо
+  const shockGeo = new THREE.RingGeometry(r * 0.85, r * 1.02, 40);
+  const shockMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0.9,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const shock = new THREE.Mesh(shockGeo, shockMat);
+  shock.rotation.x = -Math.PI / 2;
+  shock.position.set(x, 0.16, z);
+  scene.add(shock);
+
+  const start2 = performance.now();
+  function animShock() {
+    const t = (performance.now() - start2) / 380;
+    if (t >= 1) { scene.remove(shock); return; }
+    const s = 1 + t * 1.6;
+    shock.scale.set(s, s, 1);
+    shockMat.opacity = 0.9 * (1 - t);
+    requestAnimationFrame(animShock);
+  }
+  animShock();
+
+  // Частицы-льдинки
+  for (let i = 0; i < 20; i++) {
+    const a = (i / 20) * Math.PI * 2 + Math.random() * 0.2;
+    const sp = 8 + Math.random() * 6;
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.1, 0.1),
+      new THREE.MeshBasicMaterial({ color: 0xccf0ff })
+    );
+    p.position.set(x + Math.cos(a) * 0.6, 0.8, z + Math.sin(a) * 0.6);
+    p.userData = {
+      vx: Math.cos(a) * sp,
+      vz: Math.sin(a) * sp,
+      life: 0.55,
+    };
+    scene.add(p);
+    particles.push(p);
+  }
+
+  cameraShake(0.22);
 }
 
 // =====================================================
@@ -4317,17 +4542,62 @@ function doAttack() {
   const now = performance.now();
 
   // ============================================================
-  //  КВИКС — атака ракетами
+  //  КВИКС — атака
   // ============================================================
   if (currentCharacter && currentCharacter.isQuicks) {
     const isJumpAttack = hero.isJumping && hero.height > 0.3;
+
+    // ---------- УДАР В ПРЫЖКЕ — ударная волна + морозная зона ----------
     if (isJumpAttack) {
       if (now - lastJumpAttack < 350) return;
       lastJumpAttack = now;
-    } else {
-      if (now - lastAttack < stats.cooldown) return;
-      lastAttack = now;
+
+      hero.attackTimer = 0.3;
+
+      // Радиус ударной волны — базовый прыжковый + бонус
+      const shockRadius = stats.radius + JUMP_ATTACK_RADIUS_BONUS + QUICKS_SHOCKWAVE_RADIUS_BONUS;
+
+      // Ударная волна НЕ наносит урон — только отталкивает.
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (e.dying || e.flyingToBoss) continue;
+        const dx = e.x - hero.x;
+        const dz = e.z - hero.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > shockRadius + e.r) continue;
+
+        // Собаки Биологии улетают в босса — как при обычной прыжковой атаке
+        if (e.isDog && boss.active) {
+          e.flyingToBoss = true;
+          e.hp = Infinity;
+          const bdx = boss.x - e.x;
+          const bdz = boss.z - e.z;
+          const bd = Math.hypot(bdx, bdz) || 1;
+          e.flyVx = (bdx / bd) * 40;
+          e.flyVz = (bdz / bd) * 40;
+          burst(e.x, e.z, 0xffaa44);
+          continue;
+        }
+
+        // Остальных отталкиваем без урона
+        if (dist > 0.1) {
+          e.kbX = (dx / dist) * QUICKS_SHOCKWAVE_PUSH;
+          e.kbZ = (dz / dist) * QUICKS_SHOCKWAVE_PUSH;
+        }
+      }
+
+      // Морозная зона появляется под ногами
+      spawnQuicksFrostZone(hero.x, hero.z);
+
+      // Визуал ударной волны
+      spawnQuicksShockwaveEffect(hero.x, hero.z, shockRadius);
+      cameraShake(0.22);
+      return;
     }
+
+    // ---------- ОБЫЧНАЯ АТАКА — ракеты ----------
+    if (now - lastAttack < stats.cooldown) return;
+    lastAttack = now;
 
     // Количество ракет растёт с уровнем персонажа
     const missileCount = Math.min(QUICKS_MAX_MISSILES, 1 + Math.floor(level / 3));
@@ -7274,6 +7544,7 @@ function loop(now) {
     updateLuckHud();
     updateQuicksAbilities(dt);
     updateQuicksMissiles(dt);
+    updateQuicksFrostZones(dt);
     updateQuicksHud();
     updateHammerBuffBar();
     syncDebugHitboxes();
@@ -7384,8 +7655,8 @@ function loop(now) {
       const dx = hero.x - e.x;
       const dz = hero.z - e.z;
       const d = Math.hypot(dx, dz) || 1;
-      // Замедление от облака духов
-      const slowMul = 1 - (e._perfumeSlow || 0);
+      // Замедление от облака духов и морозной зоны
+      const slowMul = 1 - Math.max(e._perfumeSlow || 0, e._frostSlow || 0);
       const effSpeed = e.speed * slowMul;
       let nx = e.x + (dx / d) * effSpeed * dt;
       let nz = e.z + (dz / d) * effSpeed * dt;
@@ -7708,6 +7979,16 @@ function reset() {
     });
   });
   quicksMissiles.length = 0;
+
+  quicksFrostZones.forEach(z => {
+    scene.remove(z.mesh);
+    z.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  });
+  quicksFrostZones.length = 0;
+  for (const e of enemies) e._frostSlow = 0;
   heroGroup.visible = true;
   heroGroup.scale.setScalar(1);
   if (carMesh) {
@@ -8769,12 +9050,6 @@ function createEscapeMenu() {
           const el = weaponCardElements[num];
           if (el && el.onclick) el.onclick();
         }
-        return;
-      }
-      // S — пропустить
-      if (c === 'KeyS') {
-        e.preventDefault();
-        if (skipBtn.onclick) skipBtn.onclick();
         return;
       }
       return;
