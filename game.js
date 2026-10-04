@@ -444,6 +444,36 @@ let kolobokBerserkTimer = 0;
 let kolobokBerserkCooldown = 0;
 
 // =====================================================
+//  КВИКС — ракеты, телепорт, щит
+// =====================================================
+const QUICKS_MAX_MISSILES = 5;
+const QUICKS_TELEPORT_UNLOCK = 5;
+const QUICKS_TELEPORT_COOLDOWN = 6.0;
+const QUICKS_SHIELD_COOLDOWN = 15.0;
+const QUICKS_INVULN_DURATION = 0.2;
+const QUICKS_SHIELD_PUSH_RADIUS = 6.0;
+const QUICKS_SHIELD_PUSH_STRENGTH = 32;
+
+let quicksTeleportReady = false;       // режим выбора точки
+let quicksTeleportCooldown = 0;
+let quicksShield = 1;                  // 1 = есть, 0 = сломан
+let quicksShieldCooldown = 0;
+let quicksInvulnTimer = 0;
+
+const quicksMissiles = [];             // активные ракеты
+
+// Визуальный шар щита
+const quicksShieldMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(1.5, 16, 12),
+  new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0.22,
+    side: THREE.DoubleSide, depthWrite: false,
+  })
+);
+quicksShieldMesh.visible = false;
+scene.add(quicksShieldMesh);
+
+// =====================================================
 //  ГАЗЫ ГРИФОНИ (Q)
 // =====================================================
 const GAS_DURATION = 5.0;            // сек
@@ -504,6 +534,30 @@ function getTeacherProbability(lvl) {
   if (lvl < 11) return 0.20;   // 7–10 уровни: 20% учителей
   if (lvl < 16) return 0.30;   // 11–15 уровни: 30%
   return 0.40;                 // 16+: 40%
+}
+
+// =====================================================
+//  ФИЗРУКИ — дальнобойные враги, держат дистанцию
+// =====================================================
+const PHRYS_UNLOCK_LEVEL = 15;
+const PHRYS_MAX_ON_MAP = 5;             // максимум одновременно
+const PHRYS_KEEP_DISTANCE = 9;          // идеальная дистанция (не подходят ближе)
+const PHRYS_MIN_DISTANCE = 6;           // если игрок ближе — физрук отходит
+const PHRYS_THROW_INTERVAL = 2.0;       // как часто кидает мяч (сек)
+const PHRYS_THROW_RANGE = 16;           // радиус, на котором видит игрока
+const PHRYS_PROJ_SPEED = 11;            // скорость мяча
+const PHRYS_PROJ_DAMAGE = 18;           // базовый урон мяча
+const PHRYS_RADIUS = 1.1;               // радиус коллизии
+const PHRYS_XP_VALUE = 25;              // опыт за убийство
+
+// Активные мячики
+const physrukBalls = [];
+
+// Вероятность спавна физрука вместо обычного врага
+function getPhysrukProbability(lvl) {
+  if (lvl < PHRYS_UNLOCK_LEVEL) return 0;
+  if (lvl < 20) return 0.06;   // 6% на 15–19 уровнях
+  return 0.10;                 // 10% на 20+
 }
 
 // =====================================================
@@ -1719,12 +1773,343 @@ function updatePerfumeClouds(dt) {
   }
 }
 
+// =====================================================
+//  УРОН ИГРОКУ — с учётом щита Квикса
+// =====================================================
+function damageHero(amount) {
+  if (!gameActive) return;
+
+  if (currentCharacter && currentCharacter.isQuicks) {
+    if (quicksInvulnTimer > 0) return;      // неуязвим после слома
+    if (quicksShield > 0) {
+      // Ломаем щит
+      quicksShield = 0;
+      quicksShieldCooldown = QUICKS_SHIELD_COOLDOWN;
+      quicksInvulnTimer = QUICKS_INVULN_DURATION;
+
+      // Отталкиваем всех врагов вокруг
+      for (const e of enemies) {
+        const dx = e.x - hero.x;
+        const dz = e.z - hero.z;
+        const d = Math.hypot(dx, dz);
+        if (d < QUICKS_SHIELD_PUSH_RADIUS && d > 0.1) {
+          e.kbX = (dx / d) * QUICKS_SHIELD_PUSH_STRENGTH;
+          e.kbZ = (dz / d) * QUICKS_SHIELD_PUSH_STRENGTH;
+        }
+      }
+      // Отталкиваем мячики физруков
+      for (const b of physrukBalls) {
+        const dx = b.x - hero.x;
+        const dz = b.z - hero.z;
+        const d = Math.hypot(dx, dz);
+        if (d < QUICKS_SHIELD_PUSH_RADIUS && d > 0.1) {
+          b.vx = (dx / d) * 25;
+          b.vz = (dz / d) * 25;
+        }
+      }
+
+      spawnShieldBreakEffect(hero.x, hero.z);
+      burst(hero.x, hero.z, 0x66ddff);
+      burst(hero.x, hero.z, 0xaaeeff);
+      cameraShake(0.15);
+      return;
+    }
+  }
+
+  hp -= amount;
+  if (hp <= 0 && gameActive) {
+    hp = 0;
+    gameActive = false;
+    document.getElementById('bossHud').classList.remove('active');
+    showGameOver();
+  }
+  updateHud();
+}
+
+// =====================================================
+//  РАКЕТЫ КВИКСА
+// =====================================================
+function spawnQuicksMissile(fromX, fromZ, targetX, targetZ, target) {
+  const group = new THREE.Group();
+
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xd8d8d8 });
+  const tipMat  = new THREE.MeshLambertMaterial({ color: 0xff5522 });
+
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8), bodyMat);
+  body.rotation.x = Math.PI / 2;
+  group.add(body);
+
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.18, 8), tipMat);
+  tip.rotation.x = Math.PI / 2;
+  tip.position.z = 0.29;
+  group.add(tip);
+
+  // Пламя позади
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(0.09, 0.22, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffaa44, transparent: true, opacity: 0.9 })
+  );
+  flame.rotation.x = -Math.PI / 2;
+  flame.position.z = -0.31;
+  group.add(flame);
+
+  group.position.set(fromX, 1.8, fromZ);
+  scene.add(group);
+
+  quicksMissiles.push({
+    mesh: group,
+    x: fromX,
+    z: fromZ,
+    target,                    // враг или 'boss' или null
+    lastTargetX: targetX,
+    lastTargetZ: targetZ,
+    damage: stats.damage,
+    speed: 22,
+    life: 2.5,
+    spin: 0,
+  });
+}
+
+function updateQuicksMissiles(dt) {
+  for (let i = quicksMissiles.length - 1; i >= 0; i--) {
+    const m = quicksMissiles[i];
+    m.life -= dt;
+
+    // Цель
+    let tx = m.lastTargetX;
+    let tz = m.lastTargetZ;
+    let targetObj = null;
+
+    if (m.target === 'boss' && boss.active) {
+      tx = boss.x; tz = boss.z;
+      targetObj = 'boss';
+    } else if (m.target && m.target !== 'boss' && !m.target.dying) {
+      tx = m.target.x; tz = m.target.z;
+      targetObj = m.target;
+    } else if (m.target && m.target !== 'boss' && m.target.dying) {
+      // Цель умерла — летим в последнюю точку
+      targetObj = null;
+    } else if (m.target === 'boss' && !boss.active) {
+      targetObj = null;
+    }
+    m.lastTargetX = tx;
+    m.lastTargetZ = tz;
+
+    const dx = tx - m.x;
+    const dz = tz - m.z;
+    const d = Math.hypot(dx, dz);
+
+    // Попадание
+    if (d < 0.6) {
+      // Взрыв
+      burst(m.x, m.z, 0xffaa44);
+      burst(m.x, m.z, 0xff5522);
+
+      if (targetObj === 'boss') {
+        damageBoss(m.damage);
+      } else if (targetObj) {
+        targetObj.hp -= m.damage;
+        if (targetObj.hp <= 0) {
+          const idx = enemies.indexOf(targetObj);
+          if (idx >= 0) killEnemy(targetObj, idx);
+        }
+      } else {
+        // Взрыв по площади небольшого радиуса
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          if (e.dying) continue;
+          const dd = Math.hypot(e.x - m.x, e.z - m.z);
+          if (dd < 2.0 + e.r) {
+            e.hp -= m.damage * 0.5;
+            if (e.hp <= 0) killEnemy(e, j);
+          }
+        }
+      }
+
+      scene.remove(m.mesh);
+      m.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      quicksMissiles.splice(i, 1);
+      continue;
+    }
+
+    // Движение к цели
+    m.x += (dx / d) * m.speed * dt;
+    m.z += (dz / d) * m.speed * dt;
+    m.spin += dt * 20;
+
+    // Позиция и поворот
+    const rotAngle = Math.atan2(dx, dz);
+    m.mesh.position.set(m.x, 1.8 + Math.sin(m.spin * 0.3) * 0.1, m.z);
+    m.mesh.rotation.y = rotAngle;
+
+    // Время жизни
+    if (m.life <= 0) {
+      scene.remove(m.mesh);
+      m.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      quicksMissiles.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
+//  ТЕЛЕПОРТ КВИКСА
+// =====================================================
+function tryActivateQuicksTeleport() {
+  if (!currentCharacter || !currentCharacter.isQuicks) return;
+  if (level < QUICKS_TELEPORT_UNLOCK) return;
+  if (quicksTeleportCooldown > 0) return;
+  if (!gameActive || paused) return;
+
+  quicksTeleportReady = !quicksTeleportReady;
+}
+
+function performQuicksTeleport(targetX, targetZ) {
+  if (!quicksTeleportReady) return;
+  if (quicksTeleportCooldown > 0) return;
+
+  // Границы карты
+  targetX = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, targetX));
+  targetZ = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, targetZ));
+
+  // Запрет телепорта в дом
+  if (isInsideHouse(targetX, targetZ, 0.9)) return;
+
+  // Эффект в точке отправления
+  spawnTeleportEffect(hero.x, hero.z);
+
+  // Телепорт
+  hero.x = targetX;
+  hero.z = targetZ;
+  heroGroup.position.set(hero.x, hero.height, hero.z);
+
+  // Эффект в точке прибытия
+  spawnTeleportEffect(hero.x, hero.z);
+
+  quicksTeleportReady = false;
+  quicksTeleportCooldown = QUICKS_TELEPORT_COOLDOWN;
+}
+
+// =====================================================
+//  ОБНОВЛЕНИЕ ЩИТА И ТЕЛЕПОРТА КВИКСА
+// =====================================================
+function updateQuicksAbilities(dt) {
+  const isQuicks = currentCharacter && currentCharacter.isQuicks;
+
+  // Кулдаун телепорта
+  if (quicksTeleportCooldown > 0) {
+    quicksTeleportCooldown -= dt;
+    if (quicksTeleportCooldown < 0) quicksTeleportCooldown = 0;
+  }
+
+  // Кулдаун щита
+  if (isQuicks) {
+    if (quicksShieldCooldown > 0) {
+      quicksShieldCooldown -= dt;
+      if (quicksShieldCooldown <= 0) {
+        quicksShieldCooldown = 0;
+        quicksShield = 1;
+        burst(hero.x, hero.z, 0x66ddff);
+      }
+    }
+    if (quicksInvulnTimer > 0) {
+      quicksInvulnTimer -= dt;
+      if (quicksInvulnTimer < 0) quicksInvulnTimer = 0;
+    }
+  } else {
+    // Сброс при переключении персонажа
+    if (quicksTeleportReady) quicksTeleportReady = false;
+  }
+
+  // Визуализация шара щита
+  const showShield = isQuicks && quicksShield > 0;
+  quicksShieldMesh.visible = showShield;
+  if (showShield) {
+    quicksShieldMesh.position.set(hero.x, 1.5 + hero.height, hero.z);
+    const pulse = 1 + Math.sin(performance.now() * 0.005) * 0.05;
+    quicksShieldMesh.scale.setScalar(pulse);
+  }
+}
+
+// =====================================================
+//  ЭФФЕКТ СЛОМА ЩИТА
+// =====================================================
+function spawnShieldBreakEffect(x, z) {
+  const ringGeo = new THREE.RingGeometry(0.3, 1.5, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 1,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.15, z);
+  scene.add(ring);
+
+  const start = performance.now();
+  function anim() {
+    const t = (performance.now() - start) / 500;
+    if (t >= 1) { scene.remove(ring); return; }
+    const s = 1 + t * 4;
+    ring.scale.set(s, s, 1);
+    ringMat.opacity = 1 - t;
+    requestAnimationFrame(anim);
+  }
+  anim();
+}
+
+// =====================================================
+//  ЭФФЕКТ ТЕЛЕПОРТА
+// =====================================================
+function spawnTeleportEffect(x, z) {
+  const ringGeo = new THREE.RingGeometry(0.2, 1.8, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0.9,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.15, z);
+  scene.add(ring);
+
+  const beamGeo = new THREE.CylinderGeometry(0.6, 0.6, 8, 16, 1, true);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0.55,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.position.set(x, 4, z);
+  scene.add(beam);
+
+  const start = performance.now();
+  function anim() {
+    const t = (performance.now() - start) / 400;
+    if (t >= 1) {
+      scene.remove(ring);
+      scene.remove(beam);
+      return;
+    }
+    const s = 1 - t * 0.5;
+    ring.scale.set(s, s, 1);
+    ringMat.opacity = 0.9 * (1 - t);
+    beamMat.opacity = 0.55 * (1 - t);
+    beam.scale.x = beam.scale.z = 1 + t * 0.5;
+    requestAnimationFrame(anim);
+  }
+  anim();
+}
+
 function killEnemy(e, idx) {
   if (e.dying) return;
   e.dying = true;
   e.dyingTimer = 0.25;
   if (e.isDog) score += 5;
   else if (e.isUruru) score += 75;
+  else if (e.isPhysruk) score += 120;
   else if (e.isTeacher) score += 100;
   else score += 10;
   kills++;
@@ -1732,6 +2117,7 @@ function killEnemy(e, idx) {
   burst(e.x, e.z,
     e.isDog     ? 0x8a5a2a :
     e.isUruru   ? 0xaa66cc :
+    e.isPhysruk ? 0x2a4a8a :
     e.isTeacher ? 0x333333 :
                   e.type.color);
 }
@@ -2404,14 +2790,7 @@ function updateBoss(dt) {
 
   // Контактный урон
   if (d < BOSS_CONTACT_RADIUS && hero.height < JUMP_SAFE_HEIGHT) {
-    hp -= boss.contactDamage * dt;
-    if (hp <= 0 && gameActive) {
-      hp = 0;
-      gameActive = false;
-      document.getElementById('bossHud').classList.remove('active');
-      showGameOver();
-    }
-    updateHud();
+    damageHero(boss.contactDamage * dt);
   }
 }
 
@@ -2465,15 +2844,8 @@ function updateBossProjectiles(dt) {
     const d = Math.hypot(dx, dz);
 
     if (d < 1.1 && hero.height < JUMP_SAFE_HEIGHT) {
-      hp -= BOSS_PROJ_DAMAGE;
+      damageHero(BOSS_PROJ_DAMAGE);
       burst(p.position.x, p.position.z, 0x88ff44);
-      if (hp <= 0 && gameActive) {
-        hp = 0;
-        gameActive = false;
-        document.getElementById('bossHud').classList.remove('active');
-        showGameOver();
-      }
-      updateHud();
       scene.remove(p);
       bossProjectiles.splice(i, 1);
       continue;
@@ -2848,7 +3220,9 @@ addEventListener('keydown', e => {
 
   if (c === 'KeyQ') {
     if (gameActive && !paused) {
-      if (currentCharacter && currentCharacter.isRoller) {
+      if (currentCharacter && currentCharacter.isQuicks) {
+        tryActivateQuicksTeleport();
+      } else if (currentCharacter && currentCharacter.isRoller) {
         tryActivateKolobokBerserk();
       } else if (currentCharacter && currentCharacter.doubleSector) {
         tryActivateLucksMaxing();
@@ -3350,6 +3724,286 @@ function makeTeacherMesh() {
 }
 
 // =====================================================
+//  МЕШ ФИЗРУКА — крупный мускулистый в спортивном костюме
+// =====================================================
+function makePhysrukMesh() {
+  const group = new THREE.Group();
+
+  const skinMat  = new THREE.MeshLambertMaterial({ color: 0xd8a878 });   // загорелая кожа
+  const suitMat  = new THREE.MeshLambertMaterial({ color: 0x2a4a8a });   // синий спортивный костюм
+  const suit2Mat = new THREE.MeshLambertMaterial({ color: 0xd8d8d8 });   // белые полосы
+  const shoeMat  = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const hairMat  = new THREE.MeshLambertMaterial({ color: 0x3a2010 });
+  const whistleMat = new THREE.MeshLambertMaterial({ color: 0xffd966 });
+  const eyeMat   = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const ballMat  = new THREE.MeshLambertMaterial({ color: 0xd97a2a });
+
+  // Торс — капсула-«шкаф»
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.65, 0.75, 8, 14), suitMat);
+  torso.position.y = 1.75;
+  torso.castShadow = true;
+  group.add(torso);
+
+  // Белая полоса на груди
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.2, 0.05), suit2Mat);
+  stripe.position.set(0, 1.75, 0.63);
+  group.add(stripe);
+
+  // Плечи — широкие
+  const shoulderL = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), suitMat);
+  shoulderL.position.set(-0.72, 2.2, 0);
+  shoulderL.castShadow = true;
+  group.add(shoulderL);
+  const shoulderR = shoulderL.clone();
+  shoulderR.position.x = 0.72;
+  group.add(shoulderR);
+
+  // Голова
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), skinMat);
+  head.position.y = 2.85;
+  head.castShadow = true;
+  group.add(head);
+
+  // Короткая стрижка
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.44, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+    hairMat
+  );
+  hair.position.y = 2.92;
+  group.add(hair);
+
+  // Глаза
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), eyeMat);
+  eyeL.position.set(-0.15, 2.9, 0.38);
+  group.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.15;
+  group.add(eyeR);
+
+  const pupilL = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 6), pupilMat);
+  pupilL.position.set(-0.15, 2.9, 0.45);
+  group.add(pupilL);
+  const pupilR = pupilL.clone();
+  pupilR.position.x = 0.15;
+  group.add(pupilR);
+
+  // Серьёзные брови
+  const browMat = new THREE.MeshBasicMaterial({ color: 0x1a0a05 });
+  const browL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.03), browMat);
+  browL.position.set(-0.15, 3.05, 0.38);
+  browL.rotation.z = 0.2;
+  group.add(browL);
+  const browR = browL.clone();
+  browR.position.x = 0.15;
+  browR.rotation.z = -0.2;
+  group.add(browR);
+
+  // Рот — прямая линия
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.1, 0.02, 6, 10, Math.PI),
+    browMat
+  );
+  mouth.position.set(0, 2.7, 0.38);
+  mouth.rotation.z = Math.PI;
+  group.add(mouth);
+
+  // Свисток на шее
+  const whistle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.14), whistleMat);
+  whistle.position.set(0.15, 2.45, 0.3);
+  group.add(whistle);
+  const whistleCord = new THREE.Mesh(
+    new THREE.TorusGeometry(0.2, 0.015, 5, 16),
+    new THREE.MeshLambertMaterial({ color: 0x1a1a1a })
+  );
+  whistleCord.position.set(0, 2.5, 0.15);
+  whistleCord.rotation.x = Math.PI / 2;
+  group.add(whistleCord);
+
+  // Руки — мускулистые
+  function makeArm(side) {
+    const arm = new THREE.Group();
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.6, 6, 12), suitMat);
+    upper.position.y = -0.35;
+    upper.castShadow = true;
+    arm.add(upper);
+    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.5, 6, 10), skinMat);
+    forearm.position.y = -0.85;
+    forearm.castShadow = true;
+    arm.add(forearm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), skinMat);
+    hand.position.y = -1.2;
+    arm.add(hand);
+    arm.position.set(side * 0.85, 2.1, 0);
+    arm.rotation.z = side * 0.1;
+    return arm;
+  }
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+  group.add(armL, armR);
+
+  // Мячик в правой руке
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 12), ballMat);
+  ball.position.set(0, -1.35, 0.1);
+  ball.castShadow = true;
+  armR.add(ball);
+  group.userData.armR = armR;
+  group.userData.ballInHand = ball;
+
+  // Ноги — крепкие
+  function makeLeg(side) {
+    const leg = new THREE.Group();
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.55, 6, 12), suitMat);
+    thigh.position.y = -0.4;
+    thigh.castShadow = true;
+    leg.add(thigh);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.18, 0.52), shoeMat);
+    shoe.position.set(0, -0.95, 0.1);
+    shoe.castShadow = true;
+    leg.add(shoe);
+    leg.position.set(side * 0.28, 0.9, 0);
+    return leg;
+  }
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+  group.add(legL, legR);
+
+  return group;
+}
+
+// =====================================================
+//  СПАВН ФИЗРУКА
+// =====================================================
+function spawnPhysruk() {
+  const tier = Math.min(1 + Math.floor(level / 3), 5);
+
+  // Точка спавна — та же логика, что у обычных врагов
+  let x, z, attempts = 0;
+  do {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 30 + Math.random() * 10;
+    x = hero.x + Math.cos(angle) * dist;
+    z = hero.z + Math.sin(angle) * dist;
+    attempts++;
+  } while (attempts < 10 && isInsideHouse(x, z, 1.5));
+
+  const mesh = makePhysrukMesh();
+  mesh.position.set(x, 0, z);
+  scene.add(mesh);
+
+  const baseHp     = 12 + tier * 12;
+  const baseDamage = 22 + tier * 6;
+  const baseSpeed  = 2.2 + tier * 0.3;
+  const baseXp     = 4 + tier * 2;
+
+  // HP как у учителя (×2.8), скорость — обычная (медленный, но держит дистанцию)
+  const maxHp = Math.round(baseHp * 2.8);
+
+  enemies.push({
+    mesh, x, z,
+    type: { name: 'ФИЗРУК', color: 0x2a4a8a, r: PHRYS_RADIUS },
+    isPhysruk: true,
+    isTeacher: false,
+    hp: maxHp, maxHp,
+    speed: baseSpeed * 1.1,
+    damage: Math.round(baseDamage * 2.0),
+    r: PHRYS_RADIUS,
+    xpValue: PHRYS_XP_VALUE + tier * 2,
+    dying: false,
+    dyingTimer: 0,
+    kbX: 0, kbZ: 0,
+    wobble: Math.random() * Math.PI * 2,
+    throwTimer: 1.0 + Math.random() * 1.0,   // небольшая задержка перед первым броском
+    facingAngle: 0,
+  });
+}
+
+// =====================================================
+//  МЯЧИКИ ФИЗРУКОВ — создание, обновление, урон
+// =====================================================
+function spawnPhysrukBall(fromX, fromZ, toX, toZ, dmg) {
+  const angle = Math.atan2(toZ - fromZ, toX - fromX);
+
+  // Меш мяча
+  const ballGeo = new THREE.SphereGeometry(0.26, 14, 12);
+  const ballMat = new THREE.MeshLambertMaterial({ color: 0xd97a2a });
+  const mesh = new THREE.Mesh(ballGeo, ballMat);
+  mesh.position.set(fromX, 1.8, fromZ);
+  mesh.castShadow = true;
+  scene.add(mesh);
+
+  // Тёмные полосы на мяче — «футбольный» вид
+  const stripeMat = new THREE.MeshBasicMaterial({ color: 0x3a1a0a });
+  for (let i = 0; i < 3; i++) {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.26, 0.02, 5, 14),
+      stripeMat
+    );
+    ring.rotation.y = (i / 3) * Math.PI;
+    mesh.add(ring);
+  }
+
+  physrukBalls.push({
+    mesh,
+    x: fromX,
+    z: fromZ,
+    vx: Math.cos(angle) * PHRYS_PROJ_SPEED,
+    vz: Math.sin(angle) * PHRYS_PROJ_SPEED,
+    damage: dmg,
+    life: 2.2,
+    spin: 0,
+  });
+}
+
+function updatePhysrukBalls(dt) {
+  for (let i = physrukBalls.length - 1; i >= 0; i--) {
+    const b = physrukBalls[i];
+    b.life -= dt;
+    b.x += b.vx * dt;
+    b.z += b.vz * dt;
+    b.spin += dt * 12;
+
+    // Анимация
+    b.mesh.position.set(b.x, 1.8 + Math.sin(b.spin * 0.5) * 0.15, b.z);
+    b.mesh.rotation.x += dt * 8;
+    b.mesh.rotation.z += dt * 6;
+
+    // Попадание в игрока
+    const dx = hero.x - b.x;
+    const dz = hero.z - b.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1.0 && hero.height < JUMP_SAFE_HEIGHT &&
+        !kolobokBerserkActive &&
+        !(lucksMaxingActive && lucksMaxingPhase === 'driving') &&
+        !(gasActive && false)) {
+      // Урон игроку
+      const weakenMul = 1; // облако духов действует только при контакте, не на снаряды
+      damageHero(b.damage);
+
+      // Удаляем мяч
+      scene.remove(b.mesh);
+      b.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      physrukBalls.splice(i, 1);
+      continue;
+    }
+
+    // Убираем по времени или за картой
+    if (b.life <= 0 ||
+        Math.abs(b.x) > MAP / 2 || Math.abs(b.z) > MAP / 2) {
+      scene.remove(b.mesh);
+      b.mesh.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      physrukBalls.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
 //  МЕШ УРУРУ (из внешней модели)
 // =====================================================
 function makeUruruMesh() {
@@ -3438,11 +4092,16 @@ let debugShowHitboxes = false;
 function spawnEnemy() {
   const tier = Math.min(1 + Math.floor(level / 3), 5);
 
+  // Физрук — проверяем первым, но с ограничением по количеству
+  const physrukCount = enemies.filter(e => e.isPhysruk && !e.dying).length;
+  const canSpawnPhysruk = level >= PHRYS_UNLOCK_LEVEL && physrukCount < PHRYS_MAX_ON_MAP;
+  const isPhysruk = canSpawnPhysruk && Math.random() < getPhysrukProbability(level);
+
   // Уруру — приоритетная проверка (спавнится редко)
-  const isUruru = Math.random() < getUruruProbability(level);
+  const isUruru = !isPhysruk && Math.random() < getUruruProbability(level);
 
   // Определяем, будет ли это учитель
-  const isTeacher = !isUruru && Math.random() < getTeacherProbability(level);
+  const isTeacher = !isPhysruk && !isUruru && Math.random() < getTeacherProbability(level);
 
   // Точка спавна общая для всех
   let x, z, attempts = 0;
@@ -3453,6 +4112,42 @@ function spawnEnemy() {
     z = hero.z + Math.sin(angle) * dist;
     attempts++;
   } while (attempts < 10 && isInsideHouse(x, z, 1.5));
+
+  // ============================================================
+  //  ФИЗРУК
+  // ============================================================
+  if (isPhysruk) {
+    const mesh = makePhysrukMesh();
+    mesh.position.set(x, 0, z);
+    scene.add(mesh);
+
+    const baseHp     = 12 + tier * 12;
+    const baseDamage = 22 + tier * 6;
+    const baseSpeed  = 2.2 + tier * 0.3;
+    const baseXp     = 4 + tier * 2;
+
+    const maxHp = Math.round(baseHp * 2.8);
+
+    enemies.push({
+      mesh, x, z,
+      type: { name: 'ФИЗРУК', color: 0x2a4a8a, r: PHRYS_RADIUS },
+      isPhysruk: true,
+      isTeacher: false,
+      hp: maxHp, maxHp,
+      speed: baseSpeed * 1.1,
+      damage: Math.round(baseDamage * 2.0),
+      r: PHRYS_RADIUS,
+      xpValue: PHRYS_XP_VALUE + tier * 2,
+      dying: false,
+      dyingTimer: 0,
+      kbX: 0, kbZ: 0,
+      wobble: Math.random() * Math.PI * 2,
+      throwTimer: 1.0 + Math.random() * 1.0,
+      facingAngle: 0,
+    });
+    return;
+  }
+
 
   // ============================================================
   //  УРУРУ — редкий элитный враг
@@ -3617,10 +4312,65 @@ let lastAttack = 0;
 let lastJumpAttack = 0;
 
 function doAttack() {
-  // Во время катсцены / езды Луксмаксинга обычная атака недоступна
   if (lucksMaxingActive) return;
 
   const now = performance.now();
+
+  // ============================================================
+  //  КВИКС — атака ракетами
+  // ============================================================
+  if (currentCharacter && currentCharacter.isQuicks) {
+    const isJumpAttack = hero.isJumping && hero.height > 0.3;
+    if (isJumpAttack) {
+      if (now - lastJumpAttack < 350) return;
+      lastJumpAttack = now;
+    } else {
+      if (now - lastAttack < stats.cooldown) return;
+      lastAttack = now;
+    }
+
+    // Количество ракет растёт с уровнем персонажа
+    const missileCount = Math.min(QUICKS_MAX_MISSILES, 1 + Math.floor(level / 3));
+    // Радиус поиска целей
+    const range = 8 + level * 0.5;
+
+    // Ищем ближайших врагов
+    const candidates = [];
+    for (const e of enemies) {
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+      if (d <= range + e.r) candidates.push({ e, d });
+    }
+    if (boss.active) {
+      const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+      if (bd <= range + boss.r) candidates.push({ e: 'boss', d: bd });
+    }
+    candidates.sort((a, b) => a.d - b.d);
+
+    const targets = candidates.slice(0, missileCount);
+
+    // Если целей нет — бьём вперёд пустой ракетой (для отзывчивости)
+    if (targets.length === 0) {
+      const angle = hero.attackAngle;
+      spawnQuicksMissile(hero.x, hero.z, hero.x + Math.cos(angle) * range, hero.z + Math.sin(angle) * range, null);
+    } else {
+      for (const t of targets) {
+        if (t.e === 'boss') {
+          spawnQuicksMissile(hero.x, hero.z, boss.x, boss.z, 'boss');
+        } else {
+          spawnQuicksMissile(hero.x, hero.z, t.e.x, t.e.z, t.e);
+        }
+      }
+    }
+
+    hero.attackTimer = 0.18;
+    cameraShake(0.06);
+    return;
+  }
+
+  // ============================================================
+  //  Остальные персонажи — стандартная логика
+  // ============================================================
   const isJumpAttack = hero.isJumping && hero.height > 0.3;
 
   // Бафф молота усиливает урон физических атак
@@ -4724,7 +5474,8 @@ function updateGasHud() {
   }
   const isRoller = currentCharacter && currentCharacter.isRoller;
   const isShishkun = currentCharacter && currentCharacter.doubleSector;
-  if (isRoller || isShishkun || level < GAS_UNLOCK_LEVEL) {
+  const isQuicks = currentCharacter && currentCharacter.isQuicks;
+  if (isRoller || isShishkun || isQuicks || level < GAS_UNLOCK_LEVEL) {
     if (gasHudEl.style.display !== 'none') {
       gasHudEl.style.display = 'none';
       _lastGasHudText = '';
@@ -5183,6 +5934,90 @@ function updateLuckHud() {
 }
 
 // =====================================================
+//  HUD КВИКСА — телепорт
+// =====================================================
+const quicksHudEl = (function createQuicksHud() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #quicksHud {
+      position: fixed;
+      bottom: 190px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 30, 55, 0.88);
+      border: 3px solid #66ddff;
+      border-radius: 20px;
+      padding: 8px 22px;
+      color: #cceeff;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      font-size: 15px;
+      z-index: 60;
+      display: none;
+      letter-spacing: 1px;
+      box-shadow: 0 0 20px rgba(102, 221, 255, 0.45);
+      text-shadow: 2px 2px 0 #000;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #quicksHud.ready { animation: quicksPulse 1.2s ease-in-out infinite; }
+    #quicksHud.aiming {
+      background: rgba(30, 60, 100, 0.95);
+      border-color: #ffee88;
+      box-shadow: 0 0 35px rgba(255, 238, 136, 0.95);
+      animation: none;
+    }
+    @keyframes quicksPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(102, 221, 255, 0.45); }
+      50%      { box-shadow: 0 0 35px rgba(150, 240, 255, 0.95); }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'quicksHud';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastQuicksHudText = '';
+function updateQuicksHud() {
+  if (mobileControlsCreated) {
+    if (quicksHudEl.style.display !== 'none') {
+      quicksHudEl.style.display = 'none';
+      _lastQuicksHudText = '';
+    }
+    return;
+  }
+  const isQuicks = currentCharacter && currentCharacter.isQuicks;
+  if (!isQuicks || level < QUICKS_TELEPORT_UNLOCK) {
+    if (quicksHudEl.style.display !== 'none') {
+      quicksHudEl.style.display = 'none';
+      _lastQuicksHudText = '';
+    }
+    return;
+  }
+
+  let text, cls;
+  if (quicksTeleportReady) {
+    text = `⚡ КЛИКНИТЕ В ТОЧКУ (Q — отмена)`;
+    cls = 'aiming';
+  } else if (quicksTeleportCooldown > 0) {
+    text = `⚡ Телепорт: ${quicksTeleportCooldown.toFixed(1)}с`;
+    cls = '';
+  } else {
+    text = `⚡ Q — ТЕЛЕПОРТ ГОТОВ`;
+    cls = 'ready';
+  }
+
+  if (text !== _lastQuicksHudText || quicksHudEl.className !== cls) {
+    quicksHudEl.textContent = text;
+    quicksHudEl.className = cls;
+    quicksHudEl.style.display = 'block';
+    _lastQuicksHudText = text;
+  }
+}
+
+// =====================================================
 //  МОБИЛЬНАЯ КНОПКА СПОСОБНОСТИ — иконка + кулдаун + таймер
 // =====================================================
 function updateMobileAbilityButton() {
@@ -5195,7 +6030,22 @@ function updateMobileAbilityButton() {
   let icon = '🔥';
 
   if (currentCharacter) {
-    if (currentCharacter.isRoller) {
+    if (currentCharacter.isQuicks) {
+      icon = '⚡';
+      if (level >= QUICKS_TELEPORT_UNLOCK) {
+        if (quicksTeleportReady) {
+          state = 'active';
+          total = 1;
+          remaining = 1;
+        } else if (quicksTeleportCooldown > 0) {
+          state = 'cooldown';
+          total = QUICKS_TELEPORT_COOLDOWN;
+          remaining = quicksTeleportCooldown;
+        } else {
+          state = 'ready';
+        }
+      }
+    } else if (currentCharacter.isRoller) {
       icon = '🔥';
       if (level >= KOLOBOK_BERSERK_UNLOCK_LEVEL) {
         if (kolobokBerserkActive) {
@@ -6218,7 +7068,20 @@ function drawMinimap() {
     if (e.dying) continue;
     const p = worldToMinimap(e.x, e.z);
     mmCtx.beginPath();
-        if (e.isUruru) {
+    
+                if (e.isPhysruk) {
+      // Физрук — синий квадрат с белой полосой
+      mmCtx.fillStyle = '#2a4a8a';
+      mmCtx.fillRect(p.x - 3, p.y - 3, 6, 6);
+      mmCtx.strokeStyle = '#ffffff';
+      mmCtx.lineWidth = 1.5;
+      mmCtx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+      // Полоска
+      mmCtx.beginPath();
+      mmCtx.moveTo(p.x - 3, p.y);
+      mmCtx.lineTo(p.x + 3, p.y);
+      mmCtx.stroke();
+    } else if (e.isUruru) {
       // Уруру — фиолетовый ромб
       mmCtx.save();
       mmCtx.translate(p.x, p.y);
@@ -6409,6 +7272,9 @@ function loop(now) {
     updateGasHud();
     updateLucksMaxing(dt);
     updateLuckHud();
+    updateQuicksAbilities(dt);
+    updateQuicksMissiles(dt);
+    updateQuicksHud();
     updateHammerBuffBar();
     syncDebugHitboxes();
     useWeapons(dt);
@@ -6430,10 +7296,14 @@ function loop(now) {
       s.hpBar.lookAt(camera.position.x, s.hpBar.position.y, camera.position.z);
     }
 
-    // ТАЙМЕР БОССА — 3 минуты между появлениями
+    // ТАЙМЕР БОССА — 3 минуты между появлениями.
+    // Пока у игрока активна зона спасения — босс НЕ спавнится,
+    // но таймер продолжает идти. Как только зона исчезнет,
+    // если таймер уже истёк, босс появится в тот же кадр.
     if (!boss.active) {
       bossTimer += dt;
-      if (bossTimer >= BOSS_INTERVAL) {
+      const rescueActive = zones.some(z => z.type === 'rescue');
+      if (bossTimer >= BOSS_INTERVAL && !rescueActive) {
         bossTimer = 0;
         spawnBoss();
       }
@@ -6442,6 +7312,7 @@ function loop(now) {
     // БОСС
     updateBoss(dt);
     updateBossProjectiles(dt);
+    updatePhysrukBalls(dt);
 
     // Враги
     for (let i = enemies.length - 1; i >= 0; i--) {
@@ -6523,6 +7394,91 @@ function loop(now) {
       e.x = resolved.x;
       e.z = resolved.z;
 
+      // ===== ФИЗРУК — держит дистанцию, кидает мячики =====
+      if (e.isPhysruk) {
+        // Движение: если ближе PHRYS_MIN_DISTANCE — отходим, если дальше PHRYS_KEEP_DISTANCE — подходим
+        // (это перебивает общее движение к игроку, которое выполняется выше)
+        const distToHero = d; // переменная d уже вычислена как Math.hypot(dx, dz)
+
+        let desiredVx = 0, desiredVz = 0;
+        if (distToHero < PHRYS_MIN_DISTANCE) {
+          // Игрок слишком близко — отойти
+          desiredVx = -(dx / d) * e.speed * dt;
+          desiredVz = -(dz / d) * e.speed * dt;
+        } else if (distToHero > PHRYS_KEEP_DISTANCE) {
+          // Игрок далеко — подойти на дистанцию
+          desiredVx = (dx / d) * e.speed * dt;
+          desiredVz = (dz / d) * e.speed * dt;
+        }
+        // Иначе стоим на месте
+
+        // Применяем дополнительное движение (общее движение к игроку уже сделано выше,
+        // поэтому компенсируем его разницей)
+        // Проще: полностью заменяем — сдвигаем на разницу между желаемым и уже применённым
+        // Но мы уже применили движение к игроку выше в коде.
+        // Сделаем просто: обнуляем накопленное движение к игроку и применяем своё.
+        // Так как движение к игроку уже сделано (e.x, e.z обновлены), компенсируем:
+        // Пересчитаем позицию из начальной точки кадра — проще сделать это через обнуление.
+        // В реальности проще: переопределим e.x/e.z полностью от желаемой позиции,
+        // но для этого нужно сохранить начальные координаты. Упростим:
+        // Просто довернём позицию на небольшую корректировку.
+
+        // Корректировка позиции — сдвигаем физрука в нужную сторону, не блокируя общий цикл
+        e.x += desiredVx * 0.6;
+        e.z += desiredVz * 0.6;
+
+        // Поворот в сторону игрока
+        e.mesh.rotation.y = Math.atan2(dx, dz);
+
+        // Анимация ходьбы
+        const isMoving = Math.abs(desiredVx) + Math.abs(desiredVz) > 0.001;
+        e.wobble += dt * (isMoving ? 8 : 3);
+        const step = Math.abs(Math.sin(e.wobble * 1.5));
+        e.mesh.position.set(e.x, step * 0.1, e.z);
+        e.mesh.rotation.z = Math.sin(e.wobble * 1.5) * 0.04;
+
+        // Анимация руки с мячом — замах перед броском
+        const armR = e.mesh.userData.armR;
+        if (armR) {
+          // За 0.3 сек до броска поднимаем руку
+          const throwProgress = Math.max(0, 1 - e.throwTimer / 0.3);
+          armR.rotation.x = -throwProgress * 2.2;
+        }
+
+        // Бросок мячика раз в PHRYS_THROW_INTERVAL
+        e.throwTimer -= dt;
+        if (e.throwTimer <= 0 && distToHero < PHRYS_THROW_RANGE && !e.dying) {
+          e.throwTimer = PHRYS_THROW_INTERVAL;
+          // Небольшая случайная погрешность по направлению
+          const aimX = hero.x + (Math.random() - 0.5) * 1.5;
+          const aimZ = hero.z + (Math.random() - 0.5) * 1.5;
+          const ballDmg = Math.round(e.damage * 0.9);
+          spawnPhysrukBall(e.x, e.z, aimX, aimZ, ballDmg);
+        }
+
+        // Пропускаем обычную анимацию для физрука
+        const ud = e.mesh.userData;
+        if (ud.pupilL) {
+          const a = Math.atan2(hero.x - e.x, hero.z - e.z);
+          const ox = Math.cos(a) * 0.04;
+          const oz = Math.sin(a) * 0.04;
+          ud.pupilL.position.x = -0.15 + ox;
+          ud.pupilL.position.z = 0.38 + oz * 0.2;
+          ud.pupilR.position.x = 0.15 + ox;
+          ud.pupilR.position.z = 0.38 + oz * 0.2;
+        }
+
+        // Контактный урон — физрук слабо бьёт, если игрок всё равно прилип
+        if (distToHero < 1.3 && hero.height < JUMP_SAFE_HEIGHT &&
+            !kolobokBerserkActive && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
+          damageHero(e.damage * 0.3 * dt);
+        }
+
+        // Прерываем этот кадр для физрука — не идём в общую логику
+        continue;
+      }
+
+
         if (e.isDog) {
         // Собака бежит по земле
         e.wobble += dt * 4;
@@ -6562,16 +7518,8 @@ function loop(now) {
       }
 
       if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
-        // Ослабление от облака духов
         const weakenMul = 1 - (e._perfumeWeaken || 0);
-        hp -= e.damage * dt * 4 * weakenMul;
-        if (hp <= 0 && gameActive) {
-          hp = 0;
-          gameActive = false;
-          document.getElementById('bossHud').classList.remove('active');
-          showGameOver();
-        }
-        updateHud();
+        damageHero(e.damage * dt * 4 * weakenMul);
       }
     }
 
@@ -6690,6 +7638,16 @@ function reset() {
   bossProjectiles.forEach(p => scene.remove(p));
   bossProjectiles.length = 0;
 
+  // Очистка мячиков физруков
+  physrukBalls.forEach(b => {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  });
+  physrukBalls.length = 0;
+
   for (const k in equippedWeapons) delete equippedWeapons[k];
   weaponDamageFlat.pen = 0;
   weaponDamageFlat.bag = 0;
@@ -6734,13 +7692,22 @@ function reset() {
   _lastGasHudText = '';
   for (const e of enemies) e.inGas = false;
 
-  lucksMaxingActive = false;
-  lucksMaxingCooldown = 0;
-  lucksMaxingPhase = 'none';
-  lucksMaxingTimer = 0;
-  lucksMaxingExploded = false;
-  enemiesFrozen = false;
-  _lastLuckHudText = '';
+  // Сброс Квикса
+  quicksTeleportReady = false;
+  quicksTeleportCooldown = 0;
+  quicksShield = 1;
+  quicksShieldCooldown = 0;
+  quicksInvulnTimer = 0;
+  _lastQuicksHudText = '';
+  quicksShieldMesh.visible = false;
+  quicksMissiles.forEach(m => {
+    scene.remove(m.mesh);
+    m.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  });
+  quicksMissiles.length = 0;
   heroGroup.visible = true;
   heroGroup.scale.setScalar(1);
   if (carMesh) {
@@ -6943,9 +7910,18 @@ function createCharacterSelect() {
 //  АТАКА МЫШЬЮ (только на десктопе)
 // =====================================================
 renderer.domElement.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;          // только левая кнопка
-  if (isTouchDevice) return;            // на мобиле не дублируем
-  if (gameActive && !paused) doAttack();
+  if (e.button !== 0) return;
+  if (isTouchDevice) return;
+  if (!gameActive || paused) return;
+
+  // Квикс в режиме телепорта — клик задаёт точку
+  if (quicksTeleportReady && currentCharacter && currentCharacter.isQuicks) {
+    updateMouseWorld();
+    performQuicksTeleport(mouseWorld.x, mouseWorld.z);
+    return;
+  }
+
+  doAttack();
 });
 
 // ПКМ и СКМ можно использовать позже под другие действия
@@ -7351,8 +8327,15 @@ function createMobileControls() {
     if (!currentCharacter) return;
     if (!gameActive || paused) return;
     if (isTapOnUI(cx, cy)) return;
-    // Для Грифони тап по экрану тоже задаёт прицел,
-    // но только если у него есть направленное оружие
+
+    // Квикс в режиме телепорта — тап задаёт точку
+    if (quicksTeleportReady && currentCharacter.isQuicks) {
+      const angle = getAimAngleAtScreen(cx, cy);
+      updateMouseWorld();
+      performQuicksTeleport(mouseWorld.x, mouseWorld.z);
+      return;
+    }
+
     const isRoller = currentCharacter.isRoller;
     const hasDirectional = !!(equippedWeapons.ruler || equippedWeapons.shotgun);
     if (!isRoller && !hasDirectional) return;
@@ -7367,7 +8350,9 @@ function createMobileControls() {
   btnBerserk.addEventListener('touchstart', e => {
     e.preventDefault();
     btnBerserk.classList.add('pressed');
-    if (currentCharacter && currentCharacter.isRoller) {
+    if (currentCharacter && currentCharacter.isQuicks) {
+      tryActivateQuicksTeleport();
+    } else if (currentCharacter && currentCharacter.isRoller) {
       tryActivateKolobokBerserk();
     } else if (currentCharacter && currentCharacter.doubleSector) {
       tryActivateLucksMaxing();

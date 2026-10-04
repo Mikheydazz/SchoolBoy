@@ -683,6 +683,174 @@ function buildShishkun() {
   };
 }
 
+
+// =====================================================
+//  КВИКС — маленький робот-изобретатель в стиле Тинкера
+// =====================================================
+function buildQuicks() {
+  const group = new THREE.Group();
+
+  const metalMat   = new THREE.MeshLambertMaterial({ color: 0x4a5a7a });
+  const darkMat    = new THREE.MeshLambertMaterial({ color: 0x2a3050 });
+  const goldMat    = new THREE.MeshLambertMaterial({ color: 0xd9a02a });
+  const glowMat    = new THREE.MeshBasicMaterial({ color: 0x66ddff });
+  const glowRedMat = new THREE.MeshBasicMaterial({ color: 0xff5522 });
+  const visorMat   = new THREE.MeshBasicMaterial({ color: 0x0a1a3a });
+  const eyeMat     = new THREE.MeshBasicMaterial({ color: 0xffee66 });
+
+  // --- Ноги ---
+  function makeLeg(side) {
+    const leg = new THREE.Group();
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.35, 8), darkMat);
+    thigh.position.y = -0.18;
+    thigh.castShadow = true;
+    leg.add(thigh);
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 0.4, 8), metalMat);
+    shin.position.y = -0.55;
+    leg.add(shin);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 0.42), darkMat);
+    foot.position.set(0, -0.78, 0.06);
+    foot.castShadow = true;
+    leg.add(foot);
+    leg.position.set(side * 0.22, 1.0, 0);
+    return leg;
+  }
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+  group.add(legL, legR);
+
+  // --- Торс ---
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.6), metalMat);
+  torso.position.y = 1.45;
+  torso.castShadow = true;
+  group.add(torso);
+
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.62), goldMat);
+  chest.position.y = 1.45;
+  group.add(chest);
+
+  const chestGlow = new THREE.Mesh(new THREE.CircleGeometry(0.1, 12), glowMat);
+  chestGlow.position.set(0, 1.45, 0.32);
+  group.add(chestGlow);
+
+  // --- Плечи ---
+  const shoulderL = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), darkMat);
+  shoulderL.position.set(-0.55, 1.75, 0);
+  group.add(shoulderL);
+  const shoulderR = shoulderL.clone();
+  shoulderR.position.x = 0.55;
+  group.add(shoulderR);
+
+  // --- Голова ---
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.6), metalMat);
+  head.position.y = 2.2;
+  head.castShadow = true;
+  group.add(head);
+
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.32, 0.05), visorMat);
+  visor.position.set(0, 2.24, 0.31);
+  group.add(visor);
+
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), eyeMat);
+  eyeL.position.set(-0.15, 2.24, 0.34);
+  group.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.15;
+  group.add(eyeR);
+
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 6), goldMat);
+  antenna.position.y = 2.7;
+  group.add(antenna);
+  const antennaBall = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), glowRedMat);
+  antennaBall.position.y = 2.92;
+  group.add(antennaBall);
+
+  // --- Реактивный ранец ---
+  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.9, 0.4), darkMat);
+  backpack.position.set(0, 1.5, -0.5);
+  backpack.castShadow = true;
+  group.add(backpack);
+
+  const nozzleL = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 0.25, 10), goldMat);
+  nozzleL.position.set(-0.22, 0.95, -0.5);
+  group.add(nozzleL);
+  const nozzleR = nozzleL.clone();
+  nozzleR.position.x = 0.22;
+  group.add(nozzleR);
+
+  const flameL = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 10), glowMat);
+  flameL.position.set(-0.22, 0.75, -0.5);
+  flameL.rotation.x = Math.PI;
+  group.add(flameL);
+  const flameR = flameL.clone();
+  flameR.position.x = 0.22;
+  group.add(flameR);
+
+  for (let i = 0; i < 2; i++) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.6, 6), goldMat);
+    pipe.position.set(i === 0 ? -0.35 : 0.35, 1.6, -0.3);
+    pipe.rotation.x = 0.2;
+    group.add(pipe);
+  }
+
+  // --- Руки с ракетными установками ---
+  function makeArm(side) {
+    const arm = new THREE.Group();
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.4, 6, 10), metalMat);
+    upper.position.y = -0.25;
+    upper.castShadow = true;
+    arm.add(upper);
+    const launcher = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.5, 10), darkMat);
+    launcher.rotation.z = Math.PI / 2;
+    launcher.position.set(0, -0.55, 0);
+    launcher.castShadow = true;
+    arm.add(launcher);
+    const launcherRing = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.03, 6, 12), goldMat);
+    launcherRing.position.set(side * 0.22, -0.55, 0);
+    launcherRing.rotation.y = Math.PI / 2;
+    arm.add(launcherRing);
+    const barrel = new THREE.Mesh(new THREE.CircleGeometry(0.08, 10), glowRedMat);
+    barrel.position.set(side * 0.26, -0.55, 0);
+    barrel.rotation.y = side * Math.PI / 2;
+    arm.add(barrel);
+
+    arm.position.set(side * 0.65, 1.6, 0);
+    arm.rotation.z = side * 0.15;
+    return arm;
+  }
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+  group.add(armL, armR);
+
+  return {
+    group,
+    isRoller: false,
+    isQuicks: true,
+    setWalk(phase) {
+      const swing = Math.sin(phase) * 0.35;
+      legL.rotation.x = swing;
+      legR.rotation.x = -swing;
+      armL.rotation.x = -swing * 0.6;
+      armR.rotation.x = swing * 0.6;
+      torso.position.y = 1.45 + Math.abs(Math.sin(phase)) * 0.05;
+    },
+    setJump(attackActive) {
+      legL.rotation.x = -0.7;
+      legR.rotation.x = -0.7;
+      armL.rotation.x = -0.9;
+      if (!attackActive) armR.rotation.x = -0.9;
+      torso.position.y = 1.45;
+    },
+    setAttack(progress) {
+      const p = 1 - progress;
+      armL.rotation.x = -1.2 * p;
+      armR.rotation.x = -1.2 * p;
+    },
+    applyTransform() { antennaBall.material.color.setHex(0xffee88); },
+    revertTransform() { antennaBall.material.color.setHex(0xff5522); },
+  };
+}
+
 // =====================================================
 //  РЕЕСТР ПЕРСОНАЖЕЙ
 // =====================================================
@@ -736,5 +904,22 @@ export const CHARACTERS = [
       magnet: 2.5,
     },
     build: buildShishkun,
+  },
+    {
+    id: 'quicks',
+    name: 'Квикс',
+    emoji: '🤖',
+    desc: 'Маленький робот-изобретатель. Кидает самонаводящиеся ракеты в ближайших врагов. Телепортируется и имеет встроенный щит.',
+    stats: {
+      maxHp: 90,
+      speed: 9,
+      damage: 10,
+      radius: 2.5,
+      cooldown: 900,
+      regen: 0,
+      magnet: 2.5,
+      jumpCooldown: 2000,
+    },
+    build: buildQuicks,
   },
 ];
