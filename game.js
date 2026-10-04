@@ -463,14 +463,15 @@ let quicksInvulnTimer = 0;
 const quicksMissiles = [];             // активные ракеты
 const quicksFrostZones = [];           // морозные зоны после прыжковой атаки
 
-const QUICKS_FROST_MAX_RADIUS_BASE = 5.5;   // базовый радиус морозной зоны
+const QUICKS_FROST_MAX_RADIUS_BASE = 5.5;
 const QUICKS_FROST_MAX_RADIUS_PER_LVL = 0.35;
-const QUICKS_FROST_GROW_TIME = 1.1;         // сек до полного радиуса
-const QUICKS_FROST_LIFETIME = 5.0;          // сек жизни
-const QUICKS_FROST_SLOW = 0.55;             // 55% замедления
-const QUICKS_FROST_DPS_MULT = 0.35;         // урон/сек = stats.damage × 0.35
-const QUICKS_SHOCKWAVE_RADIUS_BONUS = 3.5;  // +3.5 к радиусу от базового прыжкового
-const QUICKS_SHOCKWAVE_PUSH = 26;           // сила отталкивания врагов
+const QUICKS_FROST_GROW_TIME = 3.3;         // ×3 — растёт медленнее
+const QUICKS_FROST_LIFETIME = 5.0;
+const QUICKS_FROST_SLOW = 0.55;
+const QUICKS_FROST_DPS_MULT = 0.35;
+const QUICKS_SHOCKWAVE_RADIUS_BONUS = 3.5;
+const QUICKS_SHOCKWAVE_PUSH = 13;           // уменьшено с 26
+const QUICKS_JUMP_ATTACK_CD = 900;          // КД прыжковой атаки (мс)
 
 // Визуальный шар щита
 const quicksShieldMesh = new THREE.Mesh(
@@ -1840,6 +1841,17 @@ function damageHero(amount) {
 //  МОРОЗНАЯ ЗОНА КВИКСА
 // =====================================================
 function spawnQuicksFrostZone(x, z) {
+  // Сначала убираем все существующие зоны — одновременно может быть только одна
+  for (let i = quicksFrostZones.length - 1; i >= 0; i--) {
+    const old = quicksFrostZones[i];
+    scene.remove(old.mesh);
+    old.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  quicksFrostZones.length = 0;
+
   const maxRadius = QUICKS_FROST_MAX_RADIUS_BASE + level * QUICKS_FROST_MAX_RADIUS_PER_LVL;
 
   const group = new THREE.Group();
@@ -1999,7 +2011,7 @@ function spawnQuicksShockwaveEffect(x, z, r) {
 
   const start = performance.now();
   function animRing() {
-    const t = (performance.now() - start) / 500;
+    const t = (performance.now() - start) / 1500;   // было 500 → стало 1500
     if (t >= 1) { scene.remove(ring); return; }
     const s = 1 + t * 0.6;
     ring.scale.set(s, s, 1);
@@ -2021,7 +2033,7 @@ function spawnQuicksShockwaveEffect(x, z, r) {
 
   const start2 = performance.now();
   function animShock() {
-    const t = (performance.now() - start2) / 380;
+    const t = (performance.now() - start2) / 1140;   // было 380 → стало 1140
     if (t >= 1) { scene.remove(shock); return; }
     const s = 1 + t * 1.6;
     shock.scale.set(s, s, 1);
@@ -4549,7 +4561,7 @@ function doAttack() {
 
     // ---------- УДАР В ПРЫЖКЕ — ударная волна + морозная зона ----------
     if (isJumpAttack) {
-      if (now - lastJumpAttack < 350) return;
+      if (now - lastJumpAttack < QUICKS_JUMP_ATTACK_CD) return;
       lastJumpAttack = now;
 
       hero.attackTimer = 0.3;
@@ -4601,8 +4613,9 @@ function doAttack() {
 
     // Количество ракет растёт с уровнем персонажа
     const missileCount = Math.min(QUICKS_MAX_MISSILES, 1 + Math.floor(level / 3));
-    // Радиус поиска целей
-    const range = 8 + level * 0.5;
+    // Радиус поиска целей — зависит от stats.radius,
+    // значит карточки «Широкий замах» расширяют и зону поиска ракет.
+    const range = 5 + stats.radius * 1.5;
 
     // Ищем ближайших врагов
     const candidates = [];
@@ -9002,7 +9015,7 @@ function createEscapeMenu() {
         highlightLevelUpCard(levelUpSelectedIndex + 1);
         return;
       }
-      if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
+      if (c === 'Enter' || c === 'NumpadEnter') {
         e.preventDefault();
         const card = levelUpCardElements[levelUpSelectedIndex];
         if (card && card.onclick) card.onclick();
@@ -9034,7 +9047,7 @@ function createEscapeMenu() {
         highlightWeaponCard(weaponSelectedIndex + 1);
         return;
       }
-      if (c === 'Enter' || c === 'NumpadEnter' || c === 'Space') {
+      if (c === 'Enter' || c === 'NumpadEnter') {
         e.preventDefault();
         const el = weaponCardElements[weaponSelectedIndex];
         if (el && el.onclick) el.onclick();
