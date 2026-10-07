@@ -5,15 +5,98 @@
 import * as THREE from 'three';
 
 // =====================================================
+//  ПРОЦЕДУРНАЯ ТЕКСТУРА ТКАНИ (для пионерской формы)
+// =====================================================
+function makeFabricTexture(baseColor, accentColor, density) {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const g = c.getContext('2d');
+
+  // Основа
+  g.fillStyle = baseColor;
+  g.fillRect(0, 0, 128, 128);
+
+  // Тонкая сетка нитей
+  const step = density || 4;
+  g.strokeStyle = accentColor;
+  g.lineWidth = 1;
+  g.globalAlpha = 0.18;
+  for (let i = 0; i < 128; i += step) {
+    g.beginPath();
+    g.moveTo(0, i);
+    g.lineTo(128, i);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(i, 0);
+    g.lineTo(i, 128);
+    g.stroke();
+  }
+
+  // Лёгкий шум — «мятость» ткани
+  g.globalAlpha = 0.07;
+  for (let i = 0; i < 500; i++) {
+    g.fillStyle = Math.random() < 0.5 ? '#000' : '#fff';
+    g.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
+  }
+
+  // Тонкие диагональные штрихи — более заметная фактура
+  g.globalAlpha = 0.05;
+  g.strokeStyle = accentColor;
+  g.lineWidth = 0.6;
+  for (let i = -128; i < 128; i += 6) {
+    g.beginPath();
+    g.moveTo(i, 0);
+    g.lineTo(i + 128, 128);
+    g.stroke();
+  }
+
+  g.globalAlpha = 1;
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// =====================================================
 //  ГРИФОНЯ
 // =====================================================
-function buildGrifonya() {
+function buildGrifonya(skinId) {
+  const isAfterSchool = skinId === 'after_school';
+  const isPioneer     = skinId === 'pioneer';
   const group = new THREE.Group();
 
+  // Тканевые текстуры для пионера
+  const pioneerShirtTex = isPioneer
+    ? makeFabricTexture('#cfc8b8', '#7a7060', 4)
+    : null;
+  const pioneerPantsTex = isPioneer
+    ? makeFabricTexture('#1e2a44', '#0a1228', 5)
+    : null;
+
   const skinMat     = new THREE.MeshLambertMaterial({ color: 0xf5d6a8 });
-  const shirtMat    = new THREE.MeshLambertMaterial({ color: 0x4a6ea8 });
-  const pantsMat    = new THREE.MeshLambertMaterial({ color: 0x3a3a5a });
-  const shoeMat     = new THREE.MeshLambertMaterial({ color: 0x2a2a1a });
+  const shirtMat    = isAfterSchool
+    ? new THREE.MeshLambertMaterial({ color: 0xffffff })   // белая майка
+    : isPioneer
+      ? new THREE.MeshLambertMaterial({
+          color: 0xcfc8b8,           // чуть темнее и теплее белого
+          map: pioneerShirtTex,
+        })
+      : new THREE.MeshLambertMaterial({ color: 0x4a6ea8 });
+  const pantsMat    = isAfterSchool
+    ? new THREE.MeshLambertMaterial({ color: 0xd97a2a })   // оранжевые шорты
+    : isPioneer
+      ? new THREE.MeshLambertMaterial({
+          color: 0x1e2a44,           // насыщенный тёмно-синий
+          map: pioneerPantsTex,
+        })
+      : new THREE.MeshLambertMaterial({ color: 0x3a3a5a });
+  const shoeMat     = isAfterSchool
+    ? new THREE.MeshLambertMaterial({ color: 0x8a5a2a })   // тапочки
+    : new THREE.MeshLambertMaterial({ color: 0x2a2a1a });
   const hairMat     = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
   const backpackMat = new THREE.MeshLambertMaterial({ color: 0xb57c4a });
   const tieMat      = new THREE.MeshLambertMaterial({ color: 0xa02020 });
@@ -34,10 +117,35 @@ function buildGrifonya() {
   belly.castShadow = true;
   group.add(belly);
 
-  const tie = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.7, 4), tieMat);
-  tie.position.set(0, 1.55, 0.95);
-  tie.rotation.x = Math.PI;
-  group.add(tie);
+  // Галстук: у «После школы» его нет,
+  // у базового — короткий, у «Пионера» — длинный красный
+  if (!isAfterSchool) {
+    const tieLength = isPioneer ? 0.95 : 0.7;
+    const tieWidth  = isPioneer ? 0.16 : 0.12;
+
+    // У пионера — плотная ткань галстука, чуть темнее базового красного
+    const tieMatFinal = isPioneer
+      ? new THREE.MeshLambertMaterial({
+          color: 0x8a1818,
+          map: makeFabricTexture('#8a1818', '#3a0808', 3),
+        })
+      : tieMat;
+
+    const tie = new THREE.Mesh(
+      new THREE.ConeGeometry(tieWidth, tieLength, 4),
+      tieMatFinal
+    );
+    tie.position.set(0, isPioneer ? 1.45 : 1.55, 0.95);
+    tie.rotation.x = Math.PI;
+    group.add(tie);
+
+    // Узелок галстука (маленький кубик сверху)
+    if (isPioneer) {
+      const knot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.08), tieMatFinal);
+      knot.position.set(0, 1.92, 0.95);
+      group.add(knot);
+    }
+  }
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.62, 20, 16), skinMat);
   head.position.y = 2.85;
@@ -78,7 +186,63 @@ function buildGrifonya() {
     hairMat
   );
   hair.position.y = 2.9;
+  // У пионера волосы скрыты пилоткой — оставляем, но сверху будет пилотка
   group.add(hair);
+
+  // Пионерская пилотка
+  if (isPioneer) {
+    const capTex  = makeFabricTexture('#c8a868', '#8a7048', 4);
+    const bandTex = makeFabricTexture('#a8884a', '#6a5028', 3);
+    const capMat  = new THREE.MeshLambertMaterial({
+      color: 0xc8a868,           // темнее, чем было (0xe8c88a)
+      map: capTex,
+    });
+    const bandMat = new THREE.MeshLambertMaterial({
+      color: 0xa8884a,
+      map: bandTex,
+    });
+    const starMat = new THREE.MeshBasicMaterial({ color: 0xc01010 });
+
+    // Основной корпус пилотки — сплюснутая пирамида
+    const capBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.55, 0.35, 6),
+      capMat
+    );
+    capBody.position.y = 3.42;
+    capBody.rotation.y = Math.PI / 6;
+    capBody.castShadow = true;
+    group.add(capBody);
+
+    // Окантовка снизу
+    const capBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.72, 0.7, 0.08, 6),
+      bandMat
+    );
+    capBand.position.y = 3.26;
+    capBand.rotation.y = Math.PI / 6;
+    group.add(capBand);
+
+    // Маленькая красная звезда спереди
+    const starShape = new THREE.Shape();
+    const outerR = 0.11;
+    const innerR = 0.045;
+    for (let i = 0; i < 10; i++) {
+      const r = (i % 2 === 0) ? outerR : innerR;
+      const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) starShape.moveTo(x, y);
+      else starShape.lineTo(x, y);
+    }
+    starShape.closePath();
+    const starGeo = new THREE.ShapeGeometry(starShape);
+    const frontStar = new THREE.Mesh(starGeo, starMat);
+    frontStar.position.set(0, 3.4, 0.55);
+    frontStar.scale.set(1.4, 1.4, 1.4);
+    group.add(frontStar);
+
+    // Кисточка сбоку? У пилотки нет кисточки, добавлять не будем.
+  }
 
   const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.5), backpackMat);
   backpack.position.set(0, 1.6, -1.05);
@@ -89,16 +253,48 @@ function buildGrifonya() {
   backpackTop.position.set(0, 2.15, -1.0);
   group.add(backpackTop);
 
+  // Красная звезда на рюкзаке у пионера
+  if (isPioneer) {
+    const starMat = new THREE.MeshBasicMaterial({ color: 0xd02020 });
+    const starGroup = new THREE.Group();
+    // Пятиконечная звезда из двух треугольников + верхний луч
+    // Проще всего — сделать звезду из 5 плоских треугольников,
+    // но это громоздко. Используем простую форму: круг с 5 зубцами
+    // через ExtrudeGeometry. Ещё проще — плоский Shape.
+    const starShape = new THREE.Shape();
+    const outerR = 0.22;
+    const innerR = 0.09;
+    for (let i = 0; i < 10; i++) {
+      const r = (i % 2 === 0) ? outerR : innerR;
+      const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) starShape.moveTo(x, y);
+      else starShape.lineTo(x, y);
+    }
+    starShape.closePath();
+    const starGeo = new THREE.ShapeGeometry(starShape);
+    const star = new THREE.Mesh(starGeo, starMat);
+    star.position.set(0, 1.55, -1.31);   // на задней стенке рюкзака
+    star.rotation.y = Math.PI;            // лицом назад
+    star.scale.set(1.3, 1.3, 1.3);
+    group.add(star);
+  }
+
   function makeArm(side) {
     const arm = new THREE.Group();
-    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 6, 12), shirtMat);
+    // На скине «После школы» рукава нет — рука голая от плеча
+    const sleeveMat = isAfterSchool ? skinMat : shirtMat;
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 6, 12), sleeveMat);
     upper.position.y = -0.35;
     upper.castShadow = true;
     arm.add(upper);
+
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), skinMat);
     hand.position.y = -0.9;
     hand.castShadow = true;
     arm.add(hand);
+
     arm.position.set(side * 1.15, 2.0, 0);
     arm.rotation.z = side * 0.15;
     return arm;
@@ -341,15 +537,22 @@ function buildKolobok() {
 // =====================================================
 //  ШИШКУН — высокий худой смуглый школьник
 // =====================================================
-function buildShishkun() {
+function buildShishkun(skinId) {
+  const isSochi = skinId === 'sochi_2014';
   const group = new THREE.Group();
 
   const skinMat  = new THREE.MeshLambertMaterial({ color: 0x8a5a3a });    // смуглая кожа
-  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xd8d8e0 });    // светлая рубашка
-  const vestMat  = new THREE.MeshLambertMaterial({ color: 0x3a2e22 });    // тёмный жилет
-  const pantsMat = new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
+  const shirtMat = isSochi
+    ? new THREE.MeshLambertMaterial({ color: 0x8a5a3a })                  // на скине торс голый
+    : new THREE.MeshLambertMaterial({ color: 0xd8d8e0 });
+  const vestMat  = isSochi
+    ? new THREE.MeshLambertMaterial({ color: 0x8a5a3a })
+    : new THREE.MeshLambertMaterial({ color: 0x3a2e22 });
+  const pantsMat = isSochi
+    ? new THREE.MeshLambertMaterial({ color: 0xd02020 })                  // красные плавки
+    : new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
   const shoeMat  = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-  const hairMat  = new THREE.MeshLambertMaterial({ color: 0x1a0e08 });    // чёрные волосы
+  const hairMat  = new THREE.MeshLambertMaterial({ color: 0x1a0e08 });
   const tieMat   = new THREE.MeshLambertMaterial({ color: 0x2a4a8a });
   const eyeMat   = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a0a0a });
@@ -358,15 +561,42 @@ function buildShishkun() {
   // ===== Ноги — длинные, тонкие =====
   function makeLeg(side) {
     const leg = new THREE.Group();
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.9, 6, 12), pantsMat);
-    thigh.position.y = -0.5;
-    thigh.castShadow = true;
-    leg.add(thigh);
 
-    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.5), shoeMat);
-    shoe.position.set(0, -1.05, 0.1);
-    shoe.castShadow = true;
-    leg.add(shoe);
+    if (isSochi) {
+      // ===== Скин «Сочи 2014»: короткие плавки + голые ноги =====
+      const shorts = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.25, 6, 12), pantsMat);
+      shorts.position.y = -0.15;
+      shorts.castShadow = true;
+      leg.add(shorts);
+
+      // Голая кожа от колена и ниже
+      const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.6, 6, 12), skinMat);
+      shin.position.y = -0.7;
+      shin.castShadow = true;
+      leg.add(shin);
+
+      // Сланцы вместо кроссовок
+      const flipMat = new THREE.MeshLambertMaterial({ color: 0xd8d8c0 });
+      const flip = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.5), flipMat);
+      flip.position.set(0, -1.05, 0.1);
+      flip.castShadow = true;
+      leg.add(flip);
+      // Ремешок
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.04, 0.06), flipMat);
+      strap.position.set(0, -0.99, 0.05);
+      leg.add(strap);
+    } else {
+      // ===== Базовый скин: длинные штаны =====
+      const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.9, 6, 12), pantsMat);
+      thigh.position.y = -0.5;
+      thigh.castShadow = true;
+      leg.add(thigh);
+
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.5), shoeMat);
+      shoe.position.set(0, -1.05, 0.1);
+      shoe.castShadow = true;
+      leg.add(shoe);
+    }
 
     leg.position.set(side * 0.24, 1.1, 0);
     return leg;
@@ -382,17 +612,20 @@ function buildShishkun() {
   torso.castShadow = true;
   group.add(torso);
 
-  // Жилет
+  // Жилет — создаём всегда, но на скине «Сочи» он скрыт.
+  // Так анимации не сломаются от обращения к несуществующей переменной.
   const vest = new THREE.Mesh(new THREE.CapsuleGeometry(0.41, 0.75, 8, 14), vestMat);
   vest.position.y = 1.85;
   vest.scale.set(0.85, 1.0, 0.68);
   vest.castShadow = true;
+  vest.visible = !isSochi;
   group.add(vest);
 
-  // Галстук
+  // Галстук — аналогично
   const tie = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.6, 4), tieMat);
   tie.position.set(0, 1.85, 0.32);
   tie.rotation.x = Math.PI;
+  tie.visible = !isSochi;
   group.add(tie);
 
   // ===== Шея =====

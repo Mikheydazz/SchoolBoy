@@ -231,12 +231,80 @@ heroGroup.add(characterRoot);
 let currentCharacter = null;
 let selectedCharacterId = null;
 
+// =====================================================
+//  МОНЕТКИ И СКИНЫ
+// =====================================================
+let coins = (() => {
+  try {
+    const v = parseInt(localStorage.getItem('mbn_coins') || '0', 10);
+    return isNaN(v) ? 0 : v;
+  } catch(e) { return 0; }
+})();
+
+let purchasedSkins = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem('mbn_purchased') || '{}');
+    return (v && typeof v === 'object') ? v : {};
+  } catch(e) { return {}; }
+})();
+
+let activeSkins = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem('mbn_active') || '{}');
+    return (v && typeof v === 'object') ? v : {};
+  } catch(e) { return {}; }
+})();
+
+function saveCoins() {
+  try { localStorage.setItem('mbn_coins', String(coins)); } catch(e) {}
+}
+function saveSkins() {
+  try {
+    localStorage.setItem('mbn_purchased', JSON.stringify(purchasedSkins));
+    localStorage.setItem('mbn_active', JSON.stringify(activeSkins));
+  } catch(e) {}
+}
+function hasSkin(charId, skinId) {
+  return (purchasedSkins[charId] || []).includes(skinId);
+}
+function getActiveSkin(charId) {
+  return activeSkins[charId] || null;
+}
+
+const SKINS_CATALOG = [
+  {
+    id: 'grifonya_after_school',
+    charId: 'grifonya',
+    skinId: 'after_school',
+    name: 'После школы',
+    desc: 'Белая майка без рукавов, оранжевые шорты и тапочки. Рюкзак на месте.',
+    price: 90,
+  },
+  {
+    id: 'grifonya_pioneer',
+    charId: 'grifonya',
+    skinId: 'pioneer',
+    name: 'Пионер',
+    desc: 'Пионерская форма: белая рубашка, красный галстук, пилотка со звездой и звезда на рюкзаке.',
+    price: 120,
+  },
+  {
+    id: 'shishkun_sochi',
+    charId: 'shishkun',
+    skinId: 'sochi_2014',
+    name: 'Сочи 2014',
+    desc: 'Красные плавки вместо формы. В Луксмаксинге подъезжает красный кабриолет.',
+    price: 120,
+  },
+];
+
 function instantiateCharacter(charDef) {
   // Очищаем корень от предыдущего персонажа
   while (characterRoot.children.length > 0) {
     characterRoot.remove(characterRoot.children[0]);
   }
-  currentCharacter = charDef.build();
+  const skinId = getActiveSkin(charDef.id);
+  currentCharacter = charDef.build(skinId);
   characterRoot.add(currentCharacter.group);
 
   // Применяем базовые статы
@@ -3495,6 +3563,26 @@ const xpBar = document.getElementById('xpBar');
 const lvlEl = document.getElementById('lvl');
 const scoreEl = document.getElementById('score');
 
+// =====================================================
+//  HUD МОНЕТОК
+// =====================================================
+const coinsHudEl = (function createCoinsHud() {
+  const hud = document.getElementById('hud');
+  if (!hud) return null;
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.id = 'coinsHud';
+  panel.style.background = 'rgba(60, 45, 15, 0.85)';
+  panel.style.color = '#ffd966';
+  panel.innerHTML = '💰 <span id="coinsValue">0</span>';
+  hud.appendChild(panel);
+  return panel;
+})();
+
+function updateCoinsHud() {
+  const el = document.getElementById('coinsValue');
+  if (el) el.textContent = coins;
+}
 const gameoverEl = document.getElementById('gameover');
 const gameoverSubtitleEl = document.getElementById('gameoverSubtitle');
 const finalLevelEl = document.getElementById('finalLevel');
@@ -3514,6 +3602,18 @@ function showGameOver(message) {
   finalScoreEl.textContent = score;
   finalKillsEl.textContent = kills;
   gameoverSubtitleEl.textContent = message || 'Грифоню завалили учебниками...';
+
+  // Конвертация очков в монетки: 1 монетка = 1000 очков
+  const earnedCoins = Math.floor(score / 1000);
+  if (earnedCoins > 0) {
+    coins += earnedCoins;
+    saveCoins();
+    updateCoinsHud();
+  }
+  const coinsEl = document.getElementById('gameoverCoins');
+  if (coinsEl) {
+    coinsEl.textContent = '+' + earnedCoins + ' 💰';
+  }
 }
 
 // =====================================================
@@ -5789,19 +5889,17 @@ function updateGasHud() {
 // =====================================================
 //  ЛУКСМАКСИНГ — модель машины
 // =====================================================
-function createLucksCarMesh() {
-  // Внешняя группа — её position и rotation.y меняет игра.
-  // Внутренняя — скомпенсированный разворот, чтобы «нос» модели
-  // смотрел в +Z (как у всех персонажей).
+function createLucksCarMesh(isCabriolet) {
   const g = new THREE.Group();
   const inner = new THREE.Group();
   inner.rotation.y = Math.PI / 2;
   g.add(inner);
-  // Внутри inner всё, что раньше добавлялось в g.
-  // Псевдоним, чтобы не переписывать все .add ниже:
   const attach = inner;
 
-  const bodyMat  = new THREE.MeshLambertMaterial({ color: 0x8a1a2a });
+  // Кабриолет — ярко-красный, без крыши
+  const bodyMat  = new THREE.MeshLambertMaterial({
+    color: isCabriolet ? 0xd02020 : 0x8a1a2a
+  });
   const trimMat  = new THREE.MeshLambertMaterial({ color: 0xffd966 });
   const glassMat = new THREE.MeshLambertMaterial({
     color: 0x88ddff, emissive: 0x224466, transparent: true, opacity: 0.75,
@@ -5815,21 +5913,63 @@ function createLucksCarMesh() {
   body.castShadow = true;
   inner.add(body);
 
-  // Верх — «кабина» чуть выше
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.85, 1.7), bodyMat);
-  cabin.position.set(0.1, 1.75, 0);
-  cabin.castShadow = true;
-  inner.add(cabin);
+  if (isCabriolet) {
+    // Кабриолет: вместо кабины — низкий открытый борт и салон
+    const cockpit = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, 1.7), bodyMat);
+    cockpit.position.set(0.1, 1.45, 0);
+    cockpit.castShadow = true;
+    inner.add(cockpit);
 
-  // Заднее стекло
-  const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
-  rearGlass.position.set(1.12, 1.8, 0);
-  inner.add(rearGlass);
+    // Сиденья
+    const seatMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+    const seat1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.7), seatMat);
+    seat1.position.set(-0.1, 1.75, 0.4);
+    inner.add(seat1);
+    const seat2 = seat1.clone();
+    seat2.position.z = -0.4;
+    inner.add(seat2);
+    const back1 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.5, 0.7), seatMat);
+    back1.position.set(0.18, 1.9, 0.4);
+    inner.add(back1);
+    const back2 = back1.clone();
+    back2.position.z = -0.4;
+    inner.add(back2);
 
-  // Лобовое стекло
-  const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
-  frontGlass.position.set(-0.92, 1.8, 0);
-  inner.add(frontGlass);
+    // Руль — маленькая тонкая полоска
+    const wheel = new THREE.Mesh(
+      new THREE.TorusGeometry(0.18, 0.03, 6, 14),
+      new THREE.MeshLambertMaterial({ color: 0x2a2a2a })
+    );
+    wheel.position.set(-0.55, 1.75, 0);
+    wheel.rotation.y = Math.PI / 2;
+    inner.add(wheel);
+
+    // Лобовое стекло — только низкая полоска спереди
+    const frontGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.35, 1.5),
+      new THREE.MeshLambertMaterial({
+        color: 0x88ddff, transparent: true, opacity: 0.55,
+      })
+    );
+    frontGlass.position.set(-0.95, 1.75, 0);
+    inner.add(frontGlass);
+  } else {
+    // Верх — «кабина» чуть выше
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.85, 1.7), bodyMat);
+    cabin.position.set(0.1, 1.75, 0);
+    cabin.castShadow = true;
+    inner.add(cabin);
+
+    // Заднее стекло
+    const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
+    rearGlass.position.set(1.12, 1.8, 0);
+    inner.add(rearGlass);
+
+    // Лобовое стекло
+    const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.6, 1.5), glassMat);
+    frontGlass.position.set(-0.92, 1.8, 0);
+    inner.add(frontGlass);
+  }
 
   // Полоска-хром по низу
   const chrome = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.08, 1.82), trimMat);
@@ -5927,8 +6067,9 @@ function tryActivateLucksMaxing() {
     hero.z + Math.cos(parkSide) * 2.4
   );
 
-  // Создаём машину
-  carMesh = createLucksCarMesh();
+  // Создаём машину — кабриолет, если активен скин «Сочи 2014»
+  const isSochi = getActiveSkin('shishkun') === 'sochi_2014';
+  carMesh = createLucksCarMesh(isSochi);
   carMesh.position.copy(carStart);
   // Развернуть машину носом к точке парковки
   const dx = carEnd.x - carStart.x;
@@ -8871,7 +9012,7 @@ function createEscapeMenu() {
 
   const overlay = document.createElement('div');
   overlay.id = 'escMenu';
-    overlay.innerHTML = `
+  overlay.innerHTML = `
     <div class="esc-panel">
       <h2>ПАУЗА</h2>
       <label class="esc-row">
@@ -8890,6 +9031,25 @@ function createEscapeMenu() {
           <span class="esc-slider-value" id="escMusicVolVal">15%</span>
         </div>
       </div>
+
+      <button id="escShopBtn" style="
+        display: block;
+        width: 100%;
+        margin: 14px 0 4px;
+        padding: 12px 22px;
+        background: linear-gradient(160deg, #b88a2a, #7a5a10);
+        color: #fff8e0;
+        border: 2px solid #ffd966;
+        border-radius: 14px;
+        font-family: inherit;
+        font-size: 17px;
+        font-weight: 900;
+        letter-spacing: 1.5px;
+        cursor: pointer;
+        box-shadow: 0 5px 0 #4a3a10, 0 7px 12px rgba(0,0,0,0.6);
+        text-shadow: 2px 2px 0 #000;
+        transition: 0.08s;
+      ">🏪 МАГАЗИН &nbsp;·&nbsp; 💰 <span id="escShopCoins">0</span></button>
 
       <div class="esc-hint">Нажмите <b>ESC</b>, чтобы продолжить</div>
     </div>
@@ -8919,6 +9079,9 @@ function createEscapeMenu() {
     musicSlider.value = volPct;
     musicSliderValue.textContent = volPct + '%';
     updateSliderBackground(volPct);
+    // Обновляем счётчик монет в кнопке магазина
+    const sc = document.getElementById('escShopCoins');
+    if (sc) sc.textContent = coins;
     overlay.classList.add('active');
   }
 
@@ -8985,6 +9148,10 @@ function createEscapeMenu() {
     }
   });
 
+    // Обновляем счётчик монет и вешаем обработчик на кнопку магазина
+  document.getElementById('escShopBtn').onclick = () => {
+    openShop();
+  };
   // Экспортируем для отладки
   window.__escMenu = {
     openMenu,
@@ -9498,6 +9665,445 @@ function setLevel(target) {
   }
 }
 
-// Запуск чит-панели и меню паузы
+
+// =====================================================
+//  МАГАЗИН
+// =====================================================
+function createShop() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #shopOverlay {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at center, #2a2418 0%, #0e0a06 100%);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      z-index: 1000;
+      color: #ffeecc;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      padding: 20px 16px 30px;
+      overflow-y: auto;
+      max-height: 100vh;
+      max-height: 100dvh;
+      gap: 14px;
+    }
+    #shopOverlay.active {
+      display: flex;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    #shopOverlay h1 {
+      color: #ffd966;
+      font-size: 38px;
+      letter-spacing: 4px;
+      margin: 8px 0 0 0;
+      text-shadow: 4px 4px 0 #3a2e1e, 0 0 30px rgba(255, 200, 80, 0.35);
+      text-align: center;
+    }
+
+    .shop-coins-bar {
+      background: rgba(60, 45, 15, 0.85);
+      border: 2px solid #ffd966;
+      border-radius: 20px;
+      padding: 8px 22px;
+      font-size: 20px;
+      font-weight: 900;
+      color: #ffd966;
+      letter-spacing: 1px;
+      text-shadow: 2px 2px 0 #000;
+      box-shadow: 0 0 18px rgba(255, 217, 102, 0.4);
+    }
+
+    #shopCards {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 900px;
+      width: 100%;
+    }
+
+    .shop-card {
+      background: linear-gradient(160deg, #3b3220, #1e1810);
+      border: 4px solid #6b5a3e;
+      border-radius: 20px;
+      padding: 18px 16px;
+      width: 340px;
+      cursor: pointer;
+      text-align: center;
+      transition: 0.12s;
+      box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      user-select: none;
+    }
+    .shop-card:hover {
+      transform: translateY(-5px);
+      border-color: #ffd966;
+    }
+    .shop-card:active {
+      transform: translateY(0);
+    }
+    .shop-card.owned {
+      border-color: #66aa55;
+    }
+    .shop-card.active {
+      border-color: #ffd966;
+      background: linear-gradient(160deg, #5a4a2a, #3a2e18);
+      box-shadow: 0 8px 0 #0b1114, 0 12px 20px #000, 0 0 30px rgba(255, 217, 102, 0.6);
+    }
+
+    .shop-card .shop-preview {
+      width: 100%;
+      height: 380px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1a1410;
+      box-shadow: inset 0 0 20px #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 4px;
+    }
+    .shop-card .shop-preview canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 12px;
+    }
+    .shop-card .shop-char {
+      font-size: 13px;
+      color: #b8c9d6;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .shop-card .shop-name {
+      font-size: 22px;
+      font-weight: 900;
+      color: #ffd966;
+      letter-spacing: 1px;
+      text-shadow: 2px 2px 0 #000;
+    }
+    .shop-card .shop-desc {
+      font-size: 12px;
+      color: #b8c9d6;
+      line-height: 1.35;
+      min-height: 50px;
+      font-weight: 600;
+    }
+    .shop-card .shop-price {
+      font-size: 18px;
+      font-weight: 900;
+      color: #ffd966;
+      letter-spacing: 1px;
+      padding: 6px 0 0;
+      border-top: 1px solid #ffffff20;
+      margin-top: 4px;
+      text-shadow: 2px 2px 0 #000;
+    }
+    .shop-card.owned .shop-price { color: #88ff88; }
+    .shop-card.active .shop-price { color: #ffd966; }
+
+    .shop-card.shake {
+      animation: shopShake 0.35s ease-in-out;
+    }
+    @keyframes shopShake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-6px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+    }
+
+    #shopClose {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border-radius: 12px;
+      background: #5a1a1a;
+      border: 2px solid #a04040;
+      color: #ffdddd;
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1001;
+      box-shadow: 0 4px 0 #0b0b0b;
+    }
+    #shopClose:hover { background: #8a2a2a; border-color: #ff5555; }
+
+    @media (hover: none) and (pointer: coarse), (max-width: 800px) {
+      #shopOverlay h1 { font-size: 26px; letter-spacing: 2px; }
+      .shop-coins-bar { font-size: 16px; padding: 6px 16px; }
+      #shopCards { gap: 10px; }
+      .shop-card {
+        width: 100%;
+        max-width: 420px;
+        padding: 12px 12px;
+        border-width: 3px;
+        box-shadow: 0 5px 0 #0b1114, 0 8px 14px #000;
+      }
+      .shop-card .shop-preview { height: 300px; }
+      .shop-card .shop-name { font-size: 18px; }
+      .shop-card .shop-desc { font-size: 11px; min-height: 40px; }
+      .shop-card .shop-price { font-size: 15px; }
+      #shopClose { top: 8px; right: 8px; width: 38px; height: 38px; font-size: 18px; }
+    }
+  `;
+  document.head.appendChild(style);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'shopOverlay';
+  overlay.innerHTML = `
+    <button id="shopClose" title="Закрыть">✕</button>
+    <h1>🏪 МАГАЗИН</h1>
+    <div class="shop-coins-bar">💰 <span id="shopCoinsValue">0</span></div>
+    <div id="shopCards"></div>
+  `;
+  document.body.appendChild(overlay);
+
+  document.getElementById('shopClose').onclick = closeShop;
+}
+
+function openShop() {
+  const overlay = document.getElementById('shopOverlay');
+  if (!overlay) return;
+  overlay.classList.add('active');
+  updateShopCoins();
+  renderShopCards();
+}
+
+function closeShop() {
+  const overlay = document.getElementById('shopOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('active');
+
+  // Освобождаем WebGL-ресурсы превью, чтобы не текла память
+  const container = document.getElementById('shopCards');
+  if (container && container._previews) {
+    for (const p of container._previews) {
+      try {
+        p.renderer.dispose();
+        p.scene.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) {
+            if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+            else o.material.dispose();
+          }
+        });
+      } catch (e) {}
+    }
+    container._previews = [];
+    container.innerHTML = '';
+  }
+}
+
+function updateShopCoins() {
+  const el = document.getElementById('shopCoinsValue');
+  if (el) el.textContent = coins;
+  const escCoins = document.getElementById('escShopCoins');
+  if (escCoins) escCoins.textContent = coins;
+}
+
+function renderShopCards() {
+  const container = document.getElementById('shopCards');
+  if (!container) return;
+
+  // Освобождаем предыдущие рендереры и сцены
+  if (container._previews) {
+    for (const p of container._previews) {
+      try {
+        p.renderer.dispose();
+        p.scene.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) {
+            if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+            else o.material.dispose();
+          }
+        });
+      } catch (e) {}
+    }
+  }
+  container._previews = [];
+  container.innerHTML = '';
+
+  for (const skin of SKINS_CATALOG) {
+    const charDef = CHARACTERS.find(c => c.id === skin.charId);
+    if (!charDef) continue;
+
+    const owned  = hasSkin(skin.charId, skin.skinId);
+    const active = getActiveSkin(skin.charId) === skin.skinId;
+
+    const card = document.createElement('div');
+    card.className = 'shop-card' + (owned ? ' owned' : '') + (active ? ' active' : '');
+
+    let priceLabel;
+    if (!owned) priceLabel = '💰 ' + skin.price;
+    else if (active) priceLabel = '✓ АКТИВЕН';
+    else priceLabel = 'Нажми, чтобы надеть';
+
+    // ---- Разметка карточки с местом под canvas ----
+    card.innerHTML = `
+      <div class="shop-preview"></div>
+      <div class="shop-char">Скин для ${charDef.name}</div>
+      <div class="shop-name">${skin.name}</div>
+      <div class="shop-desc">${skin.desc}</div>
+      <div class="shop-price">${priceLabel}</div>
+    `;
+
+    // ---- Создаём мини-сцену ----
+    const previewHost = card.querySelector('.shop-preview');
+    const preview = createSkinPreview(charDef, skin.skinId);
+    previewHost.appendChild(preview.renderer.domElement);
+    container._previews.push(preview);
+
+    card.onclick = () => {
+      if (!owned) {
+        if (coins >= skin.price) {
+          coins -= skin.price;
+          if (!purchasedSkins[skin.charId]) purchasedSkins[skin.charId] = [];
+          purchasedSkins[skin.charId].push(skin.skinId);
+          activeSkins[skin.charId] = skin.skinId;
+          saveCoins();
+          saveSkins();
+          updateCoinsHud();
+          updateShopCoins();
+          renderShopCards();
+        } else {
+          card.classList.add('shake');
+          setTimeout(() => card.classList.remove('shake'), 400);
+        }
+      } else {
+        if (active) {
+          activeSkins[skin.charId] = null;
+        } else {
+          activeSkins[skin.charId] = skin.skinId;
+        }
+        saveSkins();
+        renderShopCards();
+      }
+    };
+
+    container.appendChild(card);
+  }
+
+  // Запускаем цикл анимации для всех превью
+  startPreviewLoop(container);
+}
+
+// =====================================================
+//  ПРЕВЬЮ МОДЕЛИ ПЕРСОНАЖА
+// =====================================================
+function createSkinPreview(charDef, skinId) {
+  const W = 320, H = 380;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1410);
+
+  const camera = new THREE.PerspectiveCamera(38, W / H, 0.1, 50);
+  camera.position.set(0, 1.8, 6.2);
+  camera.lookAt(0, 1.8, 0);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setSize(W, H, false);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = false;
+
+  // Свет
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444433, 1.0);
+  scene.add(hemi);
+
+  const sun = new THREE.DirectionalLight(0xfff0c0, 1.2);
+  sun.position.set(3, 5, 4);
+  scene.add(sun);
+
+  const fill = new THREE.DirectionalLight(0xaaccff, 0.4);
+  fill.position.set(-3, 3, -2);
+  scene.add(fill);
+
+  // Подиум-круг
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(1.5, 32),
+    new THREE.MeshBasicMaterial({ color: 0x3a2e1e, transparent: true, opacity: 0.55 })
+  );
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = 0.01;
+  scene.add(disc);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(1.45, 1.55, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd966, transparent: true, opacity: 0.8,
+      side: THREE.DoubleSide,
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.02;
+  scene.add(ring);
+
+  // Модель
+  const model = charDef.build(skinId);
+  const group = new THREE.Group();
+  group.add(model.group);
+  group.position.y = 0;
+  scene.add(group);
+
+  return { scene, camera, renderer, group };
+}
+
+let _previewLoopStarted = false;
+function startPreviewLoop(container) {
+  // Запускаем один глобальный RAF-цикл, который рендерит все активные превью
+  if (_previewLoopStarted) return;
+  _previewLoopStarted = true;
+
+  function tick(now) {
+    const previews = container._previews || [];
+    if (previews.length === 0) {
+      _previewLoopStarted = false;
+      return;
+    }
+    const t = (now || 0) * 0.001;
+    for (const p of previews) {
+      p.group.rotation.y = t * 0.6;
+      p.renderer.render(p.scene, p.camera);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// Отладка: экспорт в window для консоли
+window.__game = {
+  get coins() { return coins; },
+  set coins(v) { coins = v; saveCoins(); updateCoinsHud(); },
+  get purchasedSkins() { return purchasedSkins; },
+  get activeSkins() { return activeSkins; },
+  addCoins(n) { coins += n; saveCoins(); updateCoinsHud(); },
+  openShop, closeShop,
+  giveAllSkins() {
+    purchasedSkins.grifonya = ['after_school'];
+    purchasedSkins.shishkun = ['sochi_2014'];
+    saveSkins();
+    renderShopCards();
+  },
+  reset() { coins = 0; saveCoins(); updateCoinsHud(); }
+};
+
+// Запуск чит-панели, меню паузы и магазина
 createCheatPanel();
 createEscapeMenu();
+createShop();
+
+// Первичная инициализация HUD монеток
+updateCoinsHud();
