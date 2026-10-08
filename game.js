@@ -542,6 +542,26 @@ const QUICKS_SHOCKWAVE_RADIUS_BONUS = 3.5;
 const QUICKS_SHOCKWAVE_PUSH = 13;           // уменьшено с 26
 const QUICKS_JUMP_ATTACK_CD = 900;          // КД прыжковой атаки (мс)
 
+// =====================================================
+//  ПЛАСТИЛИН
+// =====================================================
+const PLASTICINE_KILLS_PER_BLOB = 5;
+const PLASTICINE_BLOBS_PER_MAN = 2;
+const PLASTICINE_MUTANT_EVERY = 3;
+const PLASTICINE_REGULAR_HP_MULT = 0.20;
+const PLASTICINE_MUTANT_HP_MULT = 0.50;
+const PLASTICINE_REGULAR_DMG_MULT = 1.5;
+const PLASTICINE_MUTANT_DMG_MULT = 2.0;
+const PLASTICINE_SPEED = 5.2;
+const PLASTICINE_ATTACK_RANGE = 1.6;
+const PLASTICINE_ATTACK_COOLDOWN = 0.8;
+const PLASTICINE_COLORS = [0xff6b6b, 0x6bff6b, 0x6b6bff, 0xffdd44, 0xff88cc];
+
+let plasticineKillCounter = 0;
+let plasticineBlobs = 0;
+let plasticineManCounter = 0;
+const plasticineMen = [];
+
 // Визуальный шар щита
 const quicksShieldMesh = new THREE.Mesh(
   new THREE.SphereGeometry(1.5, 16, 12),
@@ -790,6 +810,29 @@ const WEAPONS = [
     dps:      [0,    10,   15,   20,  25],      // урон в секунду (с ур. 2)
     duration: 4.0,                                 // время жизни облака
   },
+  {
+    id: 'compass',
+    name: 'Циркуль',
+    ico: '📐',
+    desc: 'Раз в 5 сек выбирает случайного врага рядом, втыкает в него остриё и чертит вокруг окружность. Все враги внутри получают урон.',
+    color: 0x8a8a9a,
+    maxLevel: 5,
+    range:        [8, 9, 10, 11, 13],       // радиус поиска цели
+    damage:       [45, 75, 115, 165, 230],  // урон от укола
+    circleDamage: [60, 100, 150, 215, 300], // урон от окружности
+    circleRadius: [3.0, 3.5, 4.0, 4.5, 5.5],// радиус нарисованной окружности
+    cooldown:     [5000, 4600, 4200, 3800, 3400],
+    drawTime: 0.9,                          // сколько секунд рисуется окружность
+  },
+  {
+    id: 'plasticine',
+    name: 'Пластилин',
+    ico: '🧱',
+    desc: 'Каждые 5 убийств — сгусток. 2 сгустка = пластилиновый человечек, который сам идёт атаковать врагов. С 3 ур. каждый третий человечек — мутант.',
+    color: 0xff6b6b,
+    maxLevel: 5,
+    maxMen: [2, 3, 3, 4, 5],
+  },
 ];
 
 // =====================================================
@@ -808,6 +851,7 @@ const weaponDamageFlat = {
   slingshot: 0,
   shotgun: 0,
   perfume: 0,
+  compass: 0,
 };
 
 const equippedWeapons = {};
@@ -820,7 +864,11 @@ const weaponTimers = {
   hammer: 0,
   shotgun: 0,
   perfume: 0,
+  compass: 0,
 };
+
+// Активные эффекты циркуля
+const compassEffects = [];
 
 // Активные облака духов
 const perfumeClouds = [];
@@ -868,11 +916,9 @@ function weaponStat(id, statKey, fallbackLevel) {
   if (!arr) return 0;
   let value = arr[Math.max(0, Math.min(arr.length - 1, lvl - 1))] || 0;
 
-  if (statKey === 'damage' || statKey === 'dotDamage') {
-    // Плоский бонус от карточек — прибавляется к базовому урону оружия
+  if (statKey === 'damage' || statKey === 'dotDamage' || statKey === 'circleDamage') {
     const flatBonus = weaponDamageFlat[id] || 0;
     value += flatBonus;
-    // И только потом масштабируется по уровню персонажа
     const scale = 1 + (level - 1) * 0.08;
     value *= scale;
   }
@@ -1117,6 +1163,78 @@ function rebuildWeaponMeshes() {
     g.position.set(-1.05, 1.7, 0.35);
     heroGroup.add(g);
     weaponMeshes.perfume = g;
+  }
+
+  if (equippedWeapons.compass) {
+    const g = new THREE.Group();
+
+    const metalMat = new THREE.MeshLambertMaterial({ color: 0x9a9aad });
+    const legMat   = new THREE.MeshLambertMaterial({ color: 0x5a5a6a });
+
+    // Верхняя «ручка» — маленькая сфера
+    const handle = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), metalMat);
+    handle.position.y = 0.15;
+    g.add(handle);
+
+    // Две ножки циркуля — V-образные
+    const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.55, 6), legMat);
+    legL.position.set(-0.11, -0.15, 0);
+    legL.rotation.z = 0.32;
+    g.add(legL);
+
+    const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.55, 6), legMat);
+    legR.position.set(0.11, -0.15, 0);
+    legR.rotation.z = -0.32;
+    g.add(legR);
+
+    // Острая игла — левая ножка
+    const needle = new THREE.Mesh(
+      new THREE.ConeGeometry(0.02, 0.15, 5),
+      new THREE.MeshBasicMaterial({ color: 0xdddddd })
+    );
+    needle.position.set(-0.21, -0.44, 0);
+    needle.rotation.x = Math.PI;
+    needle.rotation.z = 0.32;
+    g.add(needle);
+
+    // Грифель — правая ножка (тонкая полоска)
+    const pencil = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.018, 0.2, 5),
+      new THREE.MeshBasicMaterial({ color: 0x2a2a2a })
+    );
+    pencil.position.set(0.21, -0.44, 0);
+    pencil.rotation.z = -0.32;
+    g.add(pencil);
+
+    g.position.set(1.0, 1.55, 0.35);
+    heroGroup.add(g);
+    weaponMeshes.compass = g;
+  }
+
+  if (equippedWeapons.plasticine) {
+    const g = new THREE.Group();
+
+    // Кусочек пластилина в руке — розовая лепёшка
+    const clayMat = new THREE.MeshLambertMaterial({
+      color: 0xff8fb0, flatShading: true,
+    });
+    const clay = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), clayMat);
+    clay.scale.set(1.1, 0.85, 1.0);
+    clay.castShadow = true;
+    g.add(clay);
+
+    // Маленький отпечаток пальца
+    const print = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 8, 6),
+      new THREE.MeshLambertMaterial({ color: 0xdd5f88, flatShading: true })
+    );
+    print.position.set(0.06, 0.14, 0.20);
+    print.scale.set(1.2, 0.6, 1.0);
+    g.add(print);
+
+    g.position.set(1.05, 1.55, 0.3);
+    heroGroup.add(g);
+    weaponMeshes.plasticine = g;
   }
 }
 
@@ -1496,6 +1614,57 @@ function useWeapons(dt) {
     }
   }
 
+    // =====================================================
+  //  ЦИРКУЛЬ — укол и окружность
+  // =====================================================
+  if (equippedWeapons.compass) {
+    weaponTimers.compass -= dt * 1000;
+    if (weaponTimers.compass <= 0) {
+      const cd = weaponStat('compass', 'cooldown');
+      weaponTimers.compass = cd;
+
+      const range = weaponStat('compass', 'range');
+      const stabDmg = weaponStat('compass', 'damage');
+      const circleDmg = weaponStat('compass', 'circleDamage');
+      const radius = weaponStat('compass', 'circleRadius');
+      const def = WEAPONS.find(w => w.id === 'compass');
+
+      // Ищем всех врагов в радиусе
+      const candidates = [];
+      for (const e of enemies) {
+        if (e.dying || e.flyingToBoss) continue;
+        const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+        if (d <= range + e.r) candidates.push(e);
+      }
+      // Босс тоже может стать целью
+      let bossCandidate = null;
+      if (boss.active) {
+        const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+        if (bd <= range + boss.r) bossCandidate = 'boss';
+      }
+
+      // Выбираем случайную цель
+      let target = null;
+      if (candidates.length > 0 && bossCandidate) {
+        target = Math.random() < 0.15 ? bossCandidate : candidates[Math.floor(Math.random() * candidates.length)];
+      } else if (candidates.length > 0) {
+        target = candidates[Math.floor(Math.random() * candidates.length)];
+      } else if (bossCandidate) {
+        target = bossCandidate;
+      }
+
+      if (target) {
+        const tx = target === 'boss' ? boss.x : target.x;
+        const tz = target === 'boss' ? boss.z : target.z;
+        spawnCompassEffect(tx, tz, target, stabDmg, circleDmg, radius, def.drawTime);
+      }
+      // Если цели нет — таймер продолжает тикать до следующей попытки,
+      // но мы не сбрасываем его до нуля (иначе эффект зависнет до конца боя)
+      // Однако иначе кулдаун пропадёт — поэтому просто ничего не делаем
+      // и следующий цикл сработает через (уже прошедшие) мс.
+    }
+  }
+
 
     // =====================================================
   //  МОЛОТ — раз в N секунд бьёт героя и делает его красивым
@@ -1850,6 +2019,655 @@ function updatePerfumeClouds(dt) {
         if (o.material) o.material.dispose();
       });
       perfumeClouds.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
+//  ПЛАСТИЛИНОВЫЙ ЧЕЛОВЕЧЕК
+// =====================================================
+function makePlasticineManMesh(color, isMutant) {
+  const group = new THREE.Group();
+
+  const mat = new THREE.MeshLambertMaterial({ color, flatShading: true });
+  const darkMat = new THREE.MeshLambertMaterial({
+    color: new THREE.Color(color).multiplyScalar(0.55).getHex(),
+    flatShading: true,
+  });
+
+  // Тело — приплюснутая сфера
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 10), mat);
+  body.position.y = 0.85;
+  body.scale.set(1, 1.1, 0.85);
+  body.castShadow = true;
+  group.add(body);
+
+  // Голова
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 10), mat);
+  head.position.y = 1.6;
+  head.scale.set(1, 0.95, 1);
+  head.castShadow = true;
+  group.add(head);
+
+  // Глаза
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), eyeMat);
+  eyeL.position.set(-0.13, 1.68, 0.35);
+  group.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.13;
+  group.add(eyeR);
+
+  // Рот — улыбка
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.08, 0.02, 5, 10, Math.PI),
+    eyeMat
+  );
+  mouth.position.set(0, 1.5, 0.37);
+  mouth.rotation.z = Math.PI;
+  group.add(mouth);
+
+  // Руки
+  const armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.28, 5, 8), mat);
+  armL.position.set(-0.52, 0.9, 0);
+  armL.rotation.z = 0.35;
+  armL.castShadow = true;
+  group.add(armL);
+  const armR = armL.clone();
+  armR.position.x = 0.52;
+  armR.rotation.z = -0.35;
+  group.add(armR);
+
+  // Ноги
+  const legL = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, 0.22, 5, 8), mat);
+  legL.position.set(-0.18, 0.25, 0);
+  legL.castShadow = true;
+  group.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.18;
+  group.add(legR);
+
+  // Мутация: рожки и злые брови
+  if (isMutant) {
+    const hornL = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.32, 6), darkMat);
+    hornL.position.set(-0.18, 2.05, 0);
+    hornL.rotation.z = 0.28;
+    group.add(hornL);
+    const hornR = hornL.clone();
+    hornR.position.x = 0.18;
+    hornR.rotation.z = -0.28;
+    group.add(hornR);
+
+    const browL = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.035, 0.04), eyeMat);
+    browL.position.set(-0.13, 1.82, 0.37);
+    browL.rotation.z = 0.32;
+    group.add(browL);
+    const browR = browL.clone();
+    browR.position.x = 0.13;
+    browR.rotation.z = -0.32;
+    group.add(browR);
+
+    // Зубы-клыки
+    const fangL = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.1, 4), eyeMat);
+    fangL.position.set(-0.06, 1.44, 0.38);
+    fangL.rotation.x = Math.PI;
+    group.add(fangL);
+    const fangR = fangL.clone();
+    fangR.position.x = 0.06;
+    group.add(fangR);
+
+    group.scale.setScalar(1.35);
+  }
+
+  return group;
+}
+
+function spawnPlasticineMan(isMutant) {
+  const color = PLASTICINE_COLORS[Math.floor(Math.random() * PLASTICINE_COLORS.length)];
+  const mesh = makePlasticineManMesh(color, isMutant);
+
+  const hpMult  = isMutant ? PLASTICINE_MUTANT_HP_MULT  : PLASTICINE_REGULAR_HP_MULT;
+  const dmgMult = isMutant ? PLASTICINE_MUTANT_DMG_MULT : PLASTICINE_REGULAR_DMG_MULT;
+
+  const maxHp  = stats.maxHp * hpMult;
+  const damage = stats.damage * dmgMult;
+
+  // Спавн рядом с героем
+  const angle = Math.random() * Math.PI * 2;
+  const spawnX = hero.x + Math.cos(angle) * 1.5;
+  const spawnZ = hero.z + Math.sin(angle) * 1.5;
+
+  mesh.position.set(spawnX, 0, spawnZ);
+  scene.add(mesh);
+
+  plasticineMen.push({
+    x: spawnX, z: spawnZ,
+    hp: maxHp, maxHp,
+    damage,
+    isMutant,
+    color,
+    mesh,
+    radius: isMutant ? 0.95 : 0.7,
+    attackCooldown: 0,
+    attackAnim: 0,
+    walkPhase: 0,
+    wobble: Math.random() * Math.PI * 2,
+    dying: false,
+    dyingTimer: 0,
+  });
+
+  burst(spawnX, spawnZ, color);
+}
+
+function killPlasticineMan(man) {
+  if (man.dying) return;
+  man.dying = true;
+  man.dyingTimer = 0.4;
+  burst(man.x, man.z, man.color);
+  cameraShake(0.08);
+}
+
+function updatePlasticineMen(dt) {
+  for (let i = plasticineMen.length - 1; i >= 0; i--) {
+    const m = plasticineMen[i];
+
+    if (m.dying) {
+      m.dyingTimer -= dt;
+      m.mesh.rotation.z += dt * 10;
+      m.mesh.rotation.x += dt * 6;
+      m.mesh.scale.multiplyScalar(1 - dt * 1.4);
+      if (m.dyingTimer <= 0) {
+        scene.remove(m.mesh);
+        m.mesh.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+        plasticineMen.splice(i, 1);
+      }
+      continue;
+    }
+
+    // Ищем ближайшего врага
+    let nearest = null, nd = Infinity;
+    for (const e of enemies) {
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - m.x, e.z - m.z);
+      if (d < nd) { nd = d; nearest = e; }
+    }
+    let bossTarget = false;
+    if (boss.active) {
+      const bd = Math.hypot(boss.x - m.x, boss.z - m.z);
+      if (bd < nd) { nd = bd; nearest = null; bossTarget = true; }
+    }
+
+    let tx, tz, attackRange;
+    if (bossTarget) {
+      tx = boss.x; tz = boss.z;
+      attackRange = PLASTICINE_ATTACK_RANGE + boss.r * 0.4;
+    } else if (nearest) {
+      tx = nearest.x; tz = nearest.z;
+      attackRange = PLASTICINE_ATTACK_RANGE + nearest.r * 0.4;
+    } else {
+      tx = hero.x; tz = hero.z;
+      attackRange = 3.5;
+    }
+
+    const dx = tx - m.x;
+    const dz = tz - m.z;
+    const d = Math.hypot(dx, dz) || 1;
+
+    if (d > attackRange) {
+      m.x += (dx / d) * PLASTICINE_SPEED * dt;
+      m.z += (dz / d) * PLASTICINE_SPEED * dt;
+      m.walkPhase += dt * 12;
+    } else {
+      m.walkPhase *= 0.85;
+    }
+
+    // Атака
+    m.attackCooldown -= dt;
+    if (nearest || bossTarget) {
+      if (d <= attackRange + 0.3 && m.attackCooldown <= 0) {
+        m.attackCooldown = PLASTICINE_ATTACK_COOLDOWN;
+        m.attackAnim = 0.25;
+
+        if (bossTarget) {
+          damageBoss(m.damage);
+        } else {
+          nearest.hp -= m.damage;
+          if (nearest.hp <= 0) {
+            const idx = enemies.indexOf(nearest);
+            if (idx >= 0) killEnemy(nearest, idx);
+          }
+        }
+        burst(tx, tz, m.color);
+      }
+    }
+
+    // Визуал
+    m.wobble += dt * 7;
+    const step = Math.abs(Math.sin(m.walkPhase));
+    m.mesh.position.set(m.x, step * 0.16, m.z);
+
+    const faceAngle = Math.atan2(dx, dz);
+    m.mesh.rotation.y = faceAngle;
+    m.mesh.rotation.x = Math.sin(m.wobble) * 0.05;
+
+    if (m.attackAnim > 0) {
+      m.attackAnim -= dt;
+      const t = m.attackAnim / 0.25;
+      m.mesh.rotation.x = -0.55 * t;
+    }
+  }
+}
+
+function trySpawnPlasticineMan() {
+  const lvl = weaponLevel('plasticine');
+  if (lvl <= 0) return;
+  const def = WEAPONS.find(w => w.id === 'plasticine');
+  const maxMen = def.maxMen[lvl - 1];
+  if (plasticineMen.filter(m => !m.dying).length >= maxMen) return;
+  if (plasticineBlobs < PLASTICINE_BLOBS_PER_MAN) return;
+
+  plasticineBlobs -= PLASTICINE_BLOBS_PER_MAN;
+  plasticineManCounter++;
+
+  const isMutant = (lvl >= 3) && (plasticineManCounter % PLASTICINE_MUTANT_EVERY === 0);
+  spawnPlasticineMan(isMutant);
+  updatePlasticineHud();
+}
+
+// =====================================================
+//  МОДЕЛЬ БОЛЬШОГО ЦИРКУЛЯ (втыкается сверху)
+// =====================================================
+function makeBigCompassMesh(radius) {
+  const g = new THREE.Group();
+
+  const metalMat  = new THREE.MeshLambertMaterial({ color: 0xb0b0c0 });
+  const darkMat   = new THREE.MeshLambertMaterial({ color: 0x5a5a6a });
+  const goldMat   = new THREE.MeshLambertMaterial({ color: 0xd9a02a });
+  const pencilMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+  const tipMat    = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+
+  // Высота шарнира зависит от радиуса — угол ножек ~35–45°
+  const H = 3.5 + radius * 0.35;
+  const legLength = Math.sqrt(H * H + radius * radius);
+  const tiltAngle = Math.atan2(radius, H);
+
+  // Игла — вертикальный стержень, торчит вниз к точке укола
+  const needleBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.12, H, 8),
+    metalMat
+  );
+  needleBody.position.y = H / 2;
+  needleBody.castShadow = true;
+  g.add(needleBody);
+
+  // Острый кончик иглы снизу
+  const needleTip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.09, 0.45, 8),
+    tipMat
+  );
+  needleTip.position.y = -0.22;
+  needleTip.rotation.x = Math.PI;
+  g.add(needleTip);
+
+  // Шарнир — золотая сфера
+  const hinge = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), goldMat);
+  hinge.position.y = H;
+  g.add(hinge);
+
+  // Ручка сверху
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 0.95, 8),
+    darkMat
+  );
+  handle.position.y = H + 0.58;
+  g.add(handle);
+
+  const handleBall = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), goldMat);
+  handleBall.position.y = H + 1.1;
+  g.add(handleBall);
+
+  // Ножка с грифелем — от шарнира (0, H) вниз к острию на земле (radius, 0)
+  const leg = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.1, legLength, 8),
+    metalMat
+  );
+  leg.position.set(radius / 2, H / 2, 0);
+  leg.rotation.z = tiltAngle;   // был -tiltAngle
+  leg.castShadow = true;
+  g.add(leg);
+
+  // Зажим грифеля — на ножке, ближе к нижнему концу
+  const clamp = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.32, 8),
+    darkMat
+  );
+  clamp.position.set(radius * 0.87, H * 0.13, 0);
+  clamp.rotation.z = tiltAngle;   // был -tiltAngle
+  g.add(clamp);
+
+  // Грифель
+  const pencil = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.045, 0.55, 6),
+    pencilMat
+  );
+  pencil.position.set(radius * 0.94, H * 0.06, 0);
+  pencil.rotation.z = tiltAngle;   // был -tiltAngle
+  g.add(pencil);
+
+  // Кончик грифеля касается земли на расстоянии radius от центра
+  const pencilTip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.045, 0.22, 6),
+    tipMat
+  );
+  pencilTip.position.set(radius, 0, 0);
+  pencilTip.rotation.x = Math.PI;
+  g.add(pencilTip);
+
+  return g;
+}
+
+// =====================================================
+//  ЦИРКУЛЬ — эффект укола и окружности
+// =====================================================
+function spawnCompassEffect(targetX, targetZ, targetEnemy, stabDamage, circleDamage, radius, drawTime) {
+  // --- 1. Быстрый «бросок» — короткая игла-линия от героя к цели ---
+  const needleLineGroup = new THREE.Group();
+  const needleLineMat = new THREE.MeshBasicMaterial({
+    color: 0xddddff, transparent: true, opacity: 1,
+  });
+
+  const dx = targetX - hero.x;
+  const dz = targetZ - hero.z;
+  const dist = Math.hypot(dx, dz) || 0.001;
+  const midX = (hero.x + targetX) / 2;
+  const midZ = (hero.z + targetZ) / 2;
+  const angle = Math.atan2(dx, dz);
+
+  const needleLine = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, dist, 6),
+    needleLineMat
+  );
+  needleLine.position.set(midX, 1.5, midZ);
+  needleLine.rotation.y = angle;
+  needleLine.rotation.x = Math.PI / 2;
+  needleLineGroup.add(needleLine);
+  scene.add(needleLineGroup);
+
+  // --- 2. Большой циркуль над целью ---
+  const bigCompass = makeBigCompassMesh(radius);
+  bigCompass.position.set(targetX, 15, targetZ);
+  scene.add(bigCompass);
+
+  // Красная точка в центре — метка укола
+  const centerMat = new THREE.MeshBasicMaterial({
+    color: 0xff5555, transparent: true, opacity: 0,
+  });
+  const centerMarker = new THREE.Mesh(new THREE.CircleGeometry(0.3, 20), centerMat);
+  centerMarker.rotation.x = -Math.PI / 2;
+  centerMarker.position.set(targetX, 0.03, targetZ);
+  scene.add(centerMarker);
+
+  // Кольцо-окружность (растёт при черчении)
+  const circleMat = new THREE.MeshBasicMaterial({
+    color: 0xaaeeff, transparent: true, opacity: 0.95,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const circleMesh = new THREE.Mesh(
+    new THREE.RingGeometry(radius - 0.12, radius, 64, 1, 0, 0.01),
+    circleMat
+  );
+  circleMesh.rotation.x = -Math.PI / 2;
+  circleMesh.position.set(targetX, 0.12, targetZ);
+  scene.add(circleMesh);
+
+  // Диск-заливка для фазы взрыва
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0x66ddff, transparent: true, opacity: 0,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const discMesh = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), discMat);
+  discMesh.rotation.x = -Math.PI / 2;
+  discMesh.position.set(targetX, 0.1, targetZ);
+  scene.add(discMesh);
+
+  compassEffects.push({
+    needleLineGroup, needleLineMat,
+    bigCompass,
+    circleMesh, circleMat,
+    discMesh, discMat,
+    centerMarker, centerMat,
+    targetX, targetZ,
+    radius, stabDamage, circleDamage,
+    drawTime,
+    phase: 'throw',
+    timer: 0,
+    stabApplied: false,
+    burstApplied: false,
+    throwDuration: 0.35,
+    descendDuration: 0.5,
+    stabDuration: 0.2,
+    burstDuration: 0.4,
+    riseDuration: 0.4,
+    targetEnemy,
+  });
+
+  cameraShake(0.08);
+}
+
+function updateCompassEffects(dt) {
+  for (let i = compassEffects.length - 1; i >= 0; i--) {
+    const eff = compassEffects[i];
+    eff.timer += dt;
+
+    // ============ ФАЗА 1: БРОСОК ============
+    if (eff.phase === 'throw') {
+      const t = Math.min(1, eff.timer / eff.throwDuration);
+      eff.needleLineMat.opacity = 1 - t;
+
+      if (t >= 1) {
+        if (eff.needleLineGroup) {
+          scene.remove(eff.needleLineGroup);
+          eff.needleLineGroup.traverse(o => {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) o.material.dispose();
+          });
+          eff.needleLineGroup = null;
+        }
+        eff.phase = 'descend';
+        eff.timer = 0;
+      }
+    }
+
+    // ============ ФАЗА 2: ЦИРКУЛЬ ПАДАЕТ СВЕРХУ ============
+    else if (eff.phase === 'descend') {
+      const t = Math.min(1, eff.timer / eff.descendDuration);
+      const eased = t * t;   // ускорение под «гравитацией»
+      eff.bigCompass.position.y = 15 * (1 - eased);
+      eff.bigCompass.rotation.y = eased * 0.6;
+
+      // Красная метка проявляется по мере падения
+      eff.centerMat.opacity = 0.35 * t;
+
+      if (t >= 1) {
+        eff.bigCompass.position.y = 0;
+        eff.phase = 'stab';
+        eff.timer = 0;
+      }
+    }
+
+    // ============ ФАЗА 3: УКОЛ ============
+    else if (eff.phase === 'stab') {
+      const t = Math.min(1, eff.timer / eff.stabDuration);
+
+      if (!eff.stabApplied) {
+        eff.stabApplied = true;
+
+        burst(eff.targetX, eff.targetZ, 0xff5555);
+
+        // Красная вспышка в точке укола
+        const flashMat = new THREE.MeshBasicMaterial({
+          color: 0xffaaaa, transparent: true, opacity: 0.9,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+        const flash = new THREE.Mesh(new THREE.CircleGeometry(0.85, 20), flashMat);
+        flash.rotation.x = -Math.PI / 2;
+        flash.position.set(eff.targetX, 0.15, eff.targetZ);
+        scene.add(flash);
+
+        const fStart = performance.now();
+        (function animF() {
+          const tf = (performance.now() - fStart) / 250;
+          if (tf >= 1) {
+            scene.remove(flash);
+            flash.geometry.dispose();
+            flash.material.dispose();
+            return;
+          }
+          flashMat.opacity = 0.9 * (1 - tf);
+          flash.scale.setScalar(1 + tf * 1.5);
+          requestAnimationFrame(animF);
+        })();
+
+        // Урон от укола
+        if (eff.targetEnemy === 'boss' && boss.active) {
+          damageBoss(eff.stabDamage);
+        } else if (eff.targetEnemy && eff.targetEnemy !== 'boss' && !eff.targetEnemy.dying) {
+          eff.targetEnemy.hp -= eff.stabDamage;
+          if (eff.targetEnemy.hp <= 0) {
+            const idx = enemies.indexOf(eff.targetEnemy);
+            if (idx >= 0) killEnemy(eff.targetEnemy, idx);
+          }
+        }
+
+        cameraShake(0.25);
+      }
+
+      eff.centerMat.opacity = 0.85 + Math.sin(eff.timer * 30) * 0.1;
+
+      if (t >= 1) {
+        eff.phase = 'draw';
+        eff.timer = 0;
+      }
+    }
+
+    // ============ ФАЗА 4: ЧЕРЧЕНИЕ ОКРУЖНОСТИ ============
+    else if (eff.phase === 'draw') {
+      const t = Math.min(1, eff.timer / eff.drawTime);
+
+      // Циркуль вращается на 360°
+      eff.bigCompass.rotation.y = t * Math.PI * 2;
+
+      // Окружность растёт от 0 до 2π
+      eff.circleMesh.geometry.dispose();
+      eff.circleMesh.geometry = new THREE.RingGeometry(
+        eff.radius - 0.12, eff.radius, 64, 1, 0, Math.max(0.01, t * Math.PI * 2)
+      );
+
+      // Пульс метки
+      eff.centerMat.opacity = 0.85 + Math.sin(eff.timer * 18) * 0.15;
+
+      if (t >= 1) {
+        eff.phase = 'burst';
+        eff.timer = 0;
+      }
+    }
+
+    // ============ ФАЗА 5: ВЗРЫВ ============
+    else if (eff.phase === 'burst') {
+      const t = Math.min(1, eff.timer / eff.burstDuration);
+
+      if (!eff.burstApplied) {
+        eff.burstApplied = true;
+
+        // Урон по всем внутри окружности
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          if (e.dying || e.flyingToBoss) continue;
+          const d = Math.hypot(e.x - eff.targetX, e.z - eff.targetZ);
+          if (d < eff.radius + e.r) {
+            e.hp -= eff.circleDamage;
+            burst(e.x, e.z, 0xaaeeff);
+            if (e.hp <= 0) killEnemy(e, j);
+          }
+        }
+        if (boss.active) {
+          const d = Math.hypot(boss.x - eff.targetX, boss.z - eff.targetZ);
+          if (d < eff.radius + boss.r) damageBoss(eff.circleDamage);
+        }
+        for (let k = statues.length - 1; k >= 0; k--) {
+          const s = statues[k];
+          const d = Math.hypot(s.x - eff.targetX, s.z - eff.targetZ);
+          if (d < eff.radius + s.r) damageStatue(s, k, eff.circleDamage);
+        }
+
+        // Большая голубая вспышка
+        const flashMat = new THREE.MeshBasicMaterial({
+          color: 0xeeffff, transparent: true, opacity: 0.85,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+        const flash = new THREE.Mesh(new THREE.CircleGeometry(eff.radius, 40), flashMat);
+        flash.rotation.x = -Math.PI / 2;
+        flash.position.set(eff.targetX, 0.15, eff.targetZ);
+        scene.add(flash);
+
+        const fStart = performance.now();
+        (function animF() {
+          const tf = (performance.now() - fStart) / 400;
+          if (tf >= 1) {
+            scene.remove(flash);
+            flash.geometry.dispose();
+            flash.material.dispose();
+            return;
+          }
+          flashMat.opacity = 0.85 * (1 - tf);
+          flash.scale.setScalar(1 + tf * 0.5);
+          requestAnimationFrame(animF);
+        })();
+
+        cameraShake(0.35);
+      }
+
+      eff.circleMat.opacity = 0.95 * (1 - t);
+      eff.discMat.opacity = 0.28 * (1 - t);
+      eff.centerMat.opacity = 1 - t;
+
+      if (t >= 1) {
+        eff.phase = 'rise';
+        eff.timer = 0;
+      }
+    }
+
+    // ============ ФАЗА 6: ЦИРКУЛЬ ПОДНИМАЕТСЯ ============
+    else if (eff.phase === 'rise') {
+      const t = Math.min(1, eff.timer / eff.riseDuration);
+      eff.bigCompass.position.y = 15 * t;
+      eff.bigCompass.rotation.y += dt * 3;
+
+      if (t >= 1) {
+        // Убираем все меши
+        scene.remove(eff.bigCompass);
+        eff.bigCompass.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+
+        scene.remove(eff.circleMesh);
+        eff.circleMesh.geometry.dispose();
+        eff.circleMat.dispose();
+
+        scene.remove(eff.discMesh);
+        eff.discMesh.geometry.dispose();
+        eff.discMat.dispose();
+
+        scene.remove(eff.centerMarker);
+        eff.centerMarker.geometry.dispose();
+        eff.centerMat.dispose();
+
+        compassEffects.splice(i, 1);
+      }
     }
   }
 }
@@ -2427,6 +3245,17 @@ function killEnemy(e, idx) {
     e.isPhysruk ? 0x2a4a8a :
     e.isTeacher ? 0x333333 :
                   e.type.color);
+
+  // ===== Пластилин — счётчик сгустков =====
+  if (equippedWeapons.plasticine) {
+    plasticineKillCounter++;
+    if (plasticineKillCounter >= PLASTICINE_KILLS_PER_BLOB) {
+      plasticineKillCounter -= PLASTICINE_KILLS_PER_BLOB;
+      plasticineBlobs++;
+      updatePlasticineHud();
+      trySpawnPlasticineMan();
+    }
+  }
 }
 
 function spawnPenEffect(x, z, angle, len) {
@@ -3564,6 +4393,31 @@ const hpBar = document.getElementById('hpBar');
 const xpBar = document.getElementById('xpBar');
 const lvlEl = document.getElementById('lvl');
 const scoreEl = document.getElementById('score');
+
+const plasticineHudEl = (function createPlasticineHud() {
+  const hud = document.getElementById('hud');
+  if (!hud) return null;
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.id = 'plasticineHud';
+  panel.style.background = 'rgba(80, 40, 60, 0.85)';
+  panel.style.color = '#ffb0d0';
+  panel.style.display = 'none';
+  panel.innerHTML = '🧱 <span id="plasticineBlobsValue">0</span>/2';
+  hud.appendChild(panel);
+  return panel;
+})();
+
+function updatePlasticineHud() {
+  const panel = document.getElementById('plasticineHud');
+  if (!panel) return;
+  const hasWeapon = !!equippedWeapons.plasticine;
+  panel.style.display = hasWeapon ? 'flex' : 'none';
+  if (hasWeapon) {
+    const el = document.getElementById('plasticineBlobsValue');
+    if (el) el.textContent = plasticineBlobs;
+  }
+}
 
 // =====================================================
 //  HUD МОНЕТОК
@@ -7711,6 +8565,9 @@ function loop(now) {
     updateQuicksMissiles(dt);
     updateQuicksFrostZones(dt);
     updateQuicksHud();
+    updateCompassEffects(dt);
+    updatePlasticineMen(dt);
+    updatePlasticineHud();
     updateHammerBuffBar();
     syncDebugHitboxes();
     useWeapons(dt);
@@ -7817,10 +8674,37 @@ function loop(now) {
       e.kbX *= 0.88;
       e.kbZ *= 0.88;
 
-      const dx = hero.x - e.x;
-      const dz = hero.z - e.z;
+      // ---- Выбор цели: игрок или пластилиновый человечек ----
+      e.aggroTimer = (e.aggroTimer || 0) - dt;
+      if (e.aggroTimer <= 0) {
+        e.aggroTimer = 1.2 + Math.random() * 0.8;
+        let bestMan = null, bestManD = Infinity;
+        for (const mm of plasticineMen) {
+          if (mm.dying) continue;
+          const md = Math.hypot(mm.x - e.x, mm.z - e.z);
+          if (md < bestManD) { bestManD = md; bestMan = mm; }
+        }
+        if (bestMan && bestManD < 8 && Math.random() < 0.65) {
+          e.targetMan = bestMan;
+        } else {
+          e.targetMan = null;
+        }
+      }
+      if (e.targetMan && (!plasticineMen.includes(e.targetMan) || e.targetMan.dying)) {
+        e.targetMan = null;
+      }
+
+      let tx = hero.x, tz = hero.z;
+      let targetManRef = null;
+      if (e.targetMan) {
+        tx = e.targetMan.x;
+        tz = e.targetMan.z;
+        targetManRef = e.targetMan;
+      }
+
+      const dx = tx - e.x;
+      const dz = tz - e.z;
       const d = Math.hypot(dx, dz) || 1;
-      // Замедление от облака духов и морозной зоны
       const slowMul = 1 - Math.max(e._perfumeSlow || 0, e._frostSlow || 0);
       const effSpeed = e.speed * slowMul;
       let nx = e.x + (dx / d) * effSpeed * dt;
@@ -7953,7 +8837,17 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
-      if (d < 1.3 * stats.bodyRadius && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
+      // ---- Контакт с целью ----
+      if (targetManRef) {
+        // Бьёт человечка
+        const contactR = 1.3 * (targetManRef.radius / 0.7);
+        if (d < contactR) {
+          targetManRef.hp -= e.damage * dt * 4;
+          if (targetManRef.hp <= 0 && !targetManRef.dying) {
+            killPlasticineMan(targetManRef);
+          }
+        }
+      } else if (d < 1.3 * stats.bodyRadius && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
         const weakenMul = 1 - (e._perfumeWeaken || 0);
         damageHero(e.damage * dt * 4 * weakenMul);
       }
@@ -8098,6 +8992,24 @@ function reset() {
   weaponTimers.hammer = 0;
   weaponTimers.shotgun = 0;
   weaponTimers.perfume = 0;
+  weaponTimers.compass = 0;
+
+  // Сброс пластилина
+  plasticineKillCounter = 0;
+  plasticineBlobs = 0;
+  plasticineManCounter = 0;
+  plasticineMen.forEach(m => {
+    scene.remove(m.mesh);
+    m.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        if (Array.isArray(o.material)) o.material.forEach(mat => mat.dispose());
+        else o.material.dispose();
+      }
+    });
+  });
+  plasticineMen.length = 0;
+  updatePlasticineHud();
   heroTransformTimer = 0;
   heroTransformMaxDuration = 1;
   heroTransformDamageMult = 1.0;
@@ -8154,6 +9066,27 @@ function reset() {
   });
   quicksFrostZones.length = 0;
   for (const e of enemies) e._frostSlow = 0;
+
+  // Очистка эффектов циркуля
+  compassEffects.forEach(eff => {
+    const clean = (obj) => {
+      if (!obj) return;
+      scene.remove(obj);
+      obj.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+          else o.material.dispose();
+        }
+      });
+    };
+    clean(eff.needleLineGroup);
+    clean(eff.bigCompass);
+    clean(eff.circleMesh);
+    clean(eff.discMesh);
+    clean(eff.centerMarker);
+  });
+  compassEffects.length = 0;
   heroGroup.visible = true;
   heroGroup.scale.setScalar(stats.bodyRadius);
   if (carMesh) {
