@@ -316,6 +316,7 @@ function instantiateCharacter(charDef) {
   stats.jumpCooldown = charDef.stats.jumpCooldown || 2000;
   stats.regen = charDef.stats.regen;
   stats.magnet = charDef.stats.magnet;
+  stats.bodyRadius = 1.0;
 
   hp = stats.maxHp;
 
@@ -650,6 +651,7 @@ const stats = {
   cooldown: 700,
   regen: 0,
   magnet: 2.5,
+  bodyRadius: 1.0,   // множитель размера и хитбокса персонажа
 };
 
 let hp = stats.maxHp;
@@ -6142,11 +6144,11 @@ function updateLucksMaxing(dt) {
     if (t >= 2.4 && t < 3.0) {
       const p = (t - 2.4) / 0.6;
       // Сжимаем героя, будто он «запрыгивает» в машину
-      heroGroup.scale.setScalar(1 - p * 0.9);
+      heroGroup.scale.setScalar((1 - p * 0.9) * stats.bodyRadius);
       heroGroup.position.y = hero.height + p * 0.5;
     } else if (t >= 3.0) {
       heroGroup.visible = false;
-      heroGroup.scale.setScalar(1);
+      heroGroup.scale.setScalar(stats.bodyRadius);
     }
 
     // --- Взрыв: 3.4 ---
@@ -6193,7 +6195,7 @@ function updateLucksMaxing(dt) {
       lucksMaxingPhase = 'none';
       lucksMaxingCooldown = LUCK_COOLDOWN;
       heroGroup.visible = true;
-      heroGroup.scale.setScalar(1);
+      heroGroup.scale.setScalar(stats.bodyRadius);
       heroGroup.position.y = hero.height;
       if (carMesh) {
         scene.remove(carMesh);
@@ -6690,23 +6692,27 @@ function addXP(v) {
 //  ПРОКАЧКА
 // =====================================================
 const UPGRADES = [
-  { ico: '💪', name: 'Толще', desc: '+30 макс. HP и +30 HP',
+  { ico: '💪', name: 'Живучесть', desc: '+30 макс. HP и +30 HP',
     apply: () => { stats.maxHp += 30; hp = Math.min(stats.maxHp, hp + 30); } },
   { ico: '👟', name: 'Быстрые ноги', desc: '+1.5 к скорости',
     apply: () => { stats.speed += 1.5; } },
-  { ico: '🎒', name: 'Тяжёлый рюкзак', desc: '+6 к урону удара рюкзаком',
+  { ico: '🎒', name: 'Тяжёлый удар', desc: '+6 к урону удара',
     apply: () => { stats.damage += 6; } },
-  { ico: '🌀', name: 'Широкий замах', desc: '+0.6 к радиусу удара',
+  { ico: '🌀', name: 'Широкий размах', desc: '+0.6 к радиусу удара',
     apply: () => { stats.radius += 0.6; } },
-  { ico: '⚡', name: 'Скорость удара', desc: '-100 мс перезарядки удара',
+  { ico: '⚡', name: 'Скорость атаки', desc: '-100 мс перезарядки удара',
     apply: () => { stats.cooldown = Math.max(250, stats.cooldown - 100); } },
   { ico: '🍔', name: 'Перекус', desc: '+1.5 HP/сек регенерации',
     apply: () => { stats.regen += 1.5; } },
   { ico: '🧲', name: 'Магнит', desc: '+2.5 к радиусу сбора опыта',
     apply: () => { stats.magnet += 2.5; } },
-  { ico: '🛡️', name: 'Плотный пиджак', desc: '+20 макс. HP',
-    apply: () => { stats.maxHp += 20; } },
-  { ico: '📚', name: 'Закалённый', desc: '+10 к урону рюкзака, -80 мс перезарядки',
+  { ico: '🛡️', name: 'Крупная фигура', desc: '+25 макс. HP, +8% к размеру и хитбоксу',
+    apply: () => {
+      stats.maxHp += 25;
+      hp = Math.min(stats.maxHp, hp + 25);
+      stats.bodyRadius = Math.min(2.0, stats.bodyRadius + 0.08);
+    } },
+  { ico: '📚', name: 'Мастерство', desc: '+10 к урону удара, -80 мс перезарядки',
     apply: () => { stats.damage += 10; stats.cooldown = Math.max(250, stats.cooldown - 80); } },
   { ico: '🦘', name: 'Прыгучий', desc: '-400 мс откат прыжка',
     apply: () => { jumpCooldownBonus += 400; } },
@@ -7625,9 +7631,10 @@ function loop(now) {
       const nx = hero.x + (mx / l) * curSpeed * dt;
       const nz = hero.z + (mz / l) * curSpeed * dt;
 
-      let tryX = resolveHouseCollision(nx, hero.z, 0.9);
-      let tryZ = resolveHouseCollision(hero.x, nz, 0.9);
-      let tryBoth = resolveHouseCollision(nx, nz, 0.9);
+      const heroCollideRadius = 0.9 * stats.bodyRadius;
+      let tryX = resolveHouseCollision(nx, hero.z, heroCollideRadius);
+      let tryZ = resolveHouseCollision(hero.x, nz, heroCollideRadius);
+      let tryBoth = resolveHouseCollision(nx, nz, heroCollideRadius);
 
       if (!isInsideHouse(tryBoth.x, tryBoth.z, 0)) {
         hero.x = tryBoth.x;
@@ -7652,6 +7659,10 @@ function loop(now) {
     hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
     hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
     heroGroup.position.set(hero.x, hero.height, hero.z);
+    // Масштаб героя от карточки «Крупная фигура»
+    if (!lucksMaxingActive) {
+      heroGroup.scale.setScalar(stats.bodyRadius);
+    }
     // Прицел — от мыши/джойстика/тапа. Работает для обоих персонажей.
     playerAimAngle = computeRollerAimAngle();
     // Колобок использует прицел для обычной атаки
@@ -7894,7 +7905,7 @@ function loop(now) {
         }
 
         // Контактный урон — физрук слабо бьёт, если игрок всё равно прилип
-        if (distToHero < 1.3 && hero.height < JUMP_SAFE_HEIGHT &&
+        if (distToHero < 1.3 * stats.bodyRadius && hero.height < JUMP_SAFE_HEIGHT &&
             !kolobokBerserkActive && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
           damageHero(e.damage * 0.3 * dt);
         }
@@ -7942,7 +7953,7 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
-      if (d < 1.3 && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
+      if (d < 1.3 * stats.bodyRadius && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
         const weakenMul = 1 - (e._perfumeWeaken || 0);
         damageHero(e.damage * dt * 4 * weakenMul);
       }
@@ -8144,7 +8155,7 @@ function reset() {
   quicksFrostZones.length = 0;
   for (const e of enemies) e._frostSlow = 0;
   heroGroup.visible = true;
-  heroGroup.scale.setScalar(1);
+  heroGroup.scale.setScalar(stats.bodyRadius);
   if (carMesh) {
     scene.remove(carMesh);
     carMesh.traverse(o => {
