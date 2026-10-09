@@ -548,13 +548,14 @@ const QUICKS_JUMP_ATTACK_CD = 900;          // КД прыжковой атак�
 const PLASTICINE_KILLS_PER_BLOB = 5;
 const PLASTICINE_BLOBS_PER_MAN = 2;
 const PLASTICINE_MUTANT_EVERY = 3;
-const PLASTICINE_REGULAR_HP_MULT = 0.20;
-const PLASTICINE_MUTANT_HP_MULT = 0.50;
+const PLASTICINE_REGULAR_HP_MULT = 2.0;
+const PLASTICINE_MUTANT_HP_MULT = 4.0;
 const PLASTICINE_REGULAR_DMG_MULT = 1.5;
 const PLASTICINE_MUTANT_DMG_MULT = 2.0;
-const PLASTICINE_SPEED = 5.2;
+const PLASTICINE_SPEED = 15.6;             // было 5.2 — ×3
 const PLASTICINE_ATTACK_RANGE = 1.6;
-const PLASTICINE_ATTACK_COOLDOWN = 0.8;
+const PLASTICINE_ATTACK_COOLDOWN = 0.4;    // было 0.8 — ×2
+const PLASTICINE_SPAWN_INVULN = 5.0;   // секунд неуязвимости после спавна
 const PLASTICINE_COLORS = [0xff6b6b, 0x6bff6b, 0x6b6bff, 0xffdd44, 0xff88cc];
 
 let plasticineKillCounter = 0;
@@ -831,7 +832,7 @@ const WEAPONS = [
     desc: 'Каждые 5 убийств — сгусток. 2 сгустка = пластилиновый человечек, который сам идёт атаковать врагов. С 3 ур. каждый третий человечек — мутант.',
     color: 0xff6b6b,
     maxLevel: 5,
-    maxMen: [2, 3, 3, 4, 5],
+    maxMen: [4, 6, 6, 8, 10],
   },
 ];
 
@@ -2154,6 +2155,7 @@ function spawnPlasticineMan(isMutant) {
     wobble: Math.random() * Math.PI * 2,
     dying: false,
     dyingTimer: 0,
+    invulnTimer: PLASTICINE_SPAWN_INVULN,
   });
 
   burst(spawnX, spawnZ, color);
@@ -2170,6 +2172,12 @@ function killPlasticineMan(man) {
 function updatePlasticineMen(dt) {
   for (let i = plasticineMen.length - 1; i >= 0; i--) {
     const m = plasticineMen[i];
+
+    // Отсчёт неуязвимости после спавна
+    if (m.invulnTimer > 0) {
+      m.invulnTimer -= dt;
+      if (m.invulnTimer < 0) m.invulnTimer = 0;
+    }
 
     if (m.dying) {
       m.dyingTimer -= dt;
@@ -2253,6 +2261,31 @@ function updatePlasticineMen(dt) {
     m.mesh.rotation.y = faceAngle;
     m.mesh.rotation.x = Math.sin(m.wobble) * 0.05;
 
+    // Мерцание, пока действует неуязвимость
+    if (m.invulnTimer > 0) {
+      const flicker = 0.7 + Math.sin(performance.now() * 0.03) * 0.3;
+      m.mesh.traverse(o => {
+        if (o.material && o.material.opacity !== undefined) {
+          if (!o.material.userData) o.material.userData = {};
+          if (o.material.userData.baseOpacity === undefined) {
+            o.material.userData.baseOpacity = o.material.opacity;
+          }
+          o.material.transparent = true;
+          o.material.opacity = o.material.userData.baseOpacity * flicker;
+        }
+      });
+    } else {
+      // Возвращаем нормальную прозрачность после окончания
+      m.mesh.traverse(o => {
+        if (o.material && o.material.userData && o.material.userData.baseOpacity !== undefined) {
+          o.material.opacity = o.material.userData.baseOpacity;
+          if (o.material.userData.baseOpacity >= 1) {
+            o.material.transparent = false;
+          }
+        }
+      });
+    }
+
     if (m.attackAnim > 0) {
       m.attackAnim -= dt;
       const t = m.attackAnim / 0.25;
@@ -2266,15 +2299,26 @@ function trySpawnPlasticineMan() {
   if (lvl <= 0) return;
   const def = WEAPONS.find(w => w.id === 'plasticine');
   const maxMen = def.maxMen[lvl - 1];
-  if (plasticineMen.filter(m => !m.dying).length >= maxMen) return;
+
+  // Сколько человечков сейчас живо
+  const alive = plasticineMen.filter(m => !m.dying).length;
+  if (alive >= maxMen) return;
+
+  // Нужно 2 сгустка, чтобы призвать партию из 2 человечков
   if (plasticineBlobs < PLASTICINE_BLOBS_PER_MAN) return;
 
-  plasticineBlobs -= PLASTICINE_BLOBS_PER_MAN;
-  plasticineManCounter++;
+  // Спавним двоих за раз, если есть место в лимите
+  const roomForTwo = maxMen - alive >= 2;
+  const spawnCount = roomForTwo ? 2 : 1;
 
-  const isMutant = (lvl >= 3) && (plasticineManCounter % PLASTICINE_MUTANT_EVERY === 0);
-  spawnPlasticineMan(isMutant);
+  plasticineBlobs -= PLASTICINE_BLOBS_PER_MAN;
   updatePlasticineHud();
+
+  for (let k = 0; k < spawnCount; k++) {
+    plasticineManCounter++;
+    const isMutant = (lvl >= 3) && (plasticineManCounter % PLASTICINE_MUTANT_EVERY === 0);
+    spawnPlasticineMan(isMutant);
+  }
 }
 
 // =====================================================
@@ -8839,12 +8883,14 @@ function loop(now) {
 
       // ---- Контакт с целью ----
       if (targetManRef) {
-        // Бьёт человечка
-        const contactR = 1.3 * (targetManRef.radius / 0.7);
-        if (d < contactR) {
-          targetManRef.hp -= e.damage * dt * 4;
-          if (targetManRef.hp <= 0 && !targetManRef.dying) {
-            killPlasticineMan(targetManRef);
+        // Бьёт человечка — только если он не в стадии неуязвимости
+        if (targetManRef.invulnTimer <= 0) {
+          const contactR = 1.3 * (targetManRef.radius / 0.7);
+          if (d < contactR) {
+            targetManRef.hp -= e.damage * dt * 4;
+            if (targetManRef.hp <= 0 && !targetManRef.dying) {
+              killPlasticineMan(targetManRef);
+            }
           }
         }
       } else if (d < 1.3 * stats.bodyRadius && hero.height < JUMP_SAFE_HEIGHT && !e.flyingToBoss && !kolobokBerserkActive && !e.inGas && !(lucksMaxingActive && lucksMaxingPhase === 'driving')) {
