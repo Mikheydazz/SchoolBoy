@@ -40,6 +40,14 @@ function tryStartBgMusic() {
 });
 
 // =====================================================
+//  МУЗЫКА ТРАНСФОРМАЦИИ КВЕЙКА
+// =====================================================
+const transformMusic = new Audio('./transformation.mp3');
+transformMusic.loop = false;
+transformMusic.preload = 'auto';
+transformMusic.volume = 0.6;
+
+// =====================================================
 //  СЦЕНА, КАМЕРА, РЕНДЕРЕР
 // =====================================================
 const scene = new THREE.Scene();
@@ -531,6 +539,34 @@ let quicksInvulnTimer = 0;
 
 const quicksMissiles = [];             // активные ракеты
 const quicksFrostZones = [];           // морозные зоны после прыжковой атаки
+
+// =====================================================
+//  ЭНЧАНТРИКС — способность Квейка (Q)
+// =====================================================
+const KVEIK_UNLOCK_LEVEL = 5;
+const KVEIK_CUTSCENE_DURATION = 13.0;    // секунд (равно длине transformation.mp3)
+const KVEIK_FLYING_DURATION = 10.0;      // секунд полёта
+const KVEIK_COOLDOWN = 30.0;             // секунд после окончания
+const KVEIK_FLYING_SPEED_MULT = 2.4;
+const KVEIK_BOMB_INTERVAL = 3.0;         // сброс бомбы раз в 3 сек
+const KVEIK_BOMB_RADIUS = 5.0;           // радиус взрыва
+const KVEIK_BOMB_DMG_MULT = 7.0;         // ×stats.damage — сильно увеличено
+const KVEIK_END_PUSH_RADIUS = 8.0;
+const KVEIK_END_PUSH_FORCE = 30;
+
+let kveikEnchantixActive = false;
+let kveikEnchantixCooldown = 0;
+let kveikPhase = 'none';   // 'cutscene' | 'flying' | 'ending' | 'none'
+let kveikTimer = 0;
+let kveikBombTimer = 0;
+let kveikSpinAngle = 0;    // вращение камеры вокруг героя
+
+const kveikBombs = [];     // активные бомбы
+const kveikTransformScene = {
+  sphere: null,
+  particles: [],
+  light: null,
+};
 
 const QUICKS_FROST_MAX_RADIUS_BASE = 5.5;
 const QUICKS_FROST_MAX_RADIUS_PER_LVL = 0.35;
@@ -2322,6 +2358,68 @@ function trySpawnPlasticineMan() {
 }
 
 // =====================================================
+//  РАССЕКАЮЩАЯ ВОЛНА КВЕЙКА
+// =====================================================
+function spawnKveikWaveEffect(x, z, angle, radius) {
+  // Две дуги — одна сверху, одна снизу, летят горизонтально вперёд
+  for (let dir = -1; dir <= 1; dir += 2) {
+    const arcGeo = new THREE.RingGeometry(radius * 0.55, radius, 32, 1, -0.9, 1.8);
+    const arcMat = new THREE.MeshBasicMaterial({
+      color: dir === 1 ? 0xaa88ff : 0x88ddff,
+      transparent: true, opacity: 0.9,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    const arc = new THREE.Mesh(arcGeo, arcMat);
+    arc.rotation.x = -Math.PI / 2;
+    arc.position.set(x, 1.1 + dir * 0.7, z);
+    // Центр дуги направлен в сторону врага.
+    // После rotation.x=-π/2 угол 0 в геометрии смотрит в +X мира,
+    // а вращение вокруг Y на +r даёт -r к мировому углу в XZ.
+    // Значит нужно rotation.z = -angle, чтобы центр дуги смотрел на врага.
+    arc.rotation.z = -angle;
+    scene.add(arc);
+
+    // Анимация: летит вперёд и растворяется
+    const startX = x, startZ = z;
+    const velX = Math.cos(angle) * 12;
+    const velZ = Math.sin(angle) * 12;
+    const start = performance.now();
+
+    (function animArc() {
+      const t = (performance.now() - start) / 320;
+      if (t >= 1) {
+        scene.remove(arc);
+        arc.geometry.dispose();
+        arc.material.dispose();
+        return;
+      }
+      arc.position.x = startX + velX * (t * 0.32);
+      arc.position.z = startZ + velZ * (t * 0.32);
+      arc.scale.setScalar(1 + t * 0.4);
+      arcMat.opacity = 0.9 * (1 - t);
+      requestAnimationFrame(animArc);
+    })();
+  }
+
+  // Частицы-искры летят вперёд
+  for (let i = 0; i < 8; i++) {
+    const a = angle + (Math.random() - 0.5) * 0.8;
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xccbbff, transparent: true, opacity: 0.9 })
+    );
+    p.position.set(x, 1.0, z);
+    p.userData = {
+      vx: Math.cos(a) * (14 + Math.random() * 4),
+      vz: Math.sin(a) * (14 + Math.random() * 4),
+      life: 0.35,
+    };
+    scene.add(p);
+    particles.push(p);
+  }
+}
+
+// =====================================================
 //  МОДЕЛЬ БОЛЬШОГО ЦИРКУЛЯ (втыкается сверху)
 // =====================================================
 function makeBigCompassMesh(radius) {
@@ -3127,6 +3225,82 @@ function updateQuicksMissiles(dt) {
 }
 
 // =====================================================
+//  ЭНЧАНТРИКС — активация
+// =====================================================
+function tryActivateKveikEnchantix() {
+  if (!currentCharacter || !currentCharacter.isKveik) return;
+  if (level < KVEIK_UNLOCK_LEVEL) return;
+  if (kveikEnchantixActive) return;
+  if (kveikEnchantixCooldown > 0) return;
+  if (!gameActive || paused) return;
+
+  kveikEnchantixActive = true;
+  kveikPhase = 'cutscene';
+  kveikTimer = 0;
+  kveikBombTimer = 0;
+  kveikSpinAngle = 0;
+  enemiesFrozen = true;
+
+  // Воспроизводим музыку превращения
+  try {
+    transformMusic.currentTime = 0;
+    transformMusic.volume = 0.6;
+    transformMusic.play().catch(() => {});
+  } catch (e) {}
+
+  // Создаём магическое пространство — большую полупрозрачную сферу вокруг героя
+  const sphereMat = new THREE.MeshBasicMaterial({
+    color: 0xff88dd,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(9, 32, 24), sphereMat);
+  sphere.position.set(hero.x, 3, hero.z);
+  scene.add(sphere);
+  kveikTransformScene.sphere = sphere;
+
+  // Внутренние частицы-блёстки
+  kveikTransformScene.particles = [];
+  for (let i = 0; i < 60; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const b = Math.random() * Math.PI;
+    const r = 3 + Math.random() * 5;
+    const pMat = new THREE.MeshBasicMaterial({
+      color: [0xff88dd, 0x88ddff, 0xffee88][Math.floor(Math.random() * 3)],
+      transparent: true, opacity: 0.85,
+    });
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.15, 6, 6), pMat);
+    p.position.set(
+      hero.x + Math.sin(b) * Math.cos(a) * r,
+      3 + Math.cos(b) * r * 0.7,
+      hero.z + Math.sin(b) * Math.sin(a) * r
+    );
+    p.userData = {
+      baseX: p.position.x, baseY: p.position.y, baseZ: p.position.z,
+      phase: Math.random() * Math.PI * 2,
+      radius: r,
+      axis: a, elevation: b,
+    };
+    scene.add(p);
+    kveikTransformScene.particles.push(p);
+  }
+
+  // Яркий свет над героем
+  const light = new THREE.PointLight(0xffaaff, 3, 15);
+  light.position.set(hero.x, 4, hero.z);
+  scene.add(light);
+  kveikTransformScene.light = light;
+
+  // Прячем оружие в руках на время превращения
+  for (const k in weaponMeshes) weaponMeshes[k].visible = false;
+
+  burst(hero.x, hero.z, 0xff88dd);
+  burst(hero.x, hero.z, 0x88ddff);
+}
+
+// =====================================================
 //  ТЕЛЕПОРТ КВИКСА
 // =====================================================
 function tryActivateQuicksTeleport() {
@@ -3162,6 +3336,486 @@ function performQuicksTeleport(targetX, targetZ) {
 
   quicksTeleportReady = false;
   quicksTeleportCooldown = QUICKS_TELEPORT_COOLDOWN;
+}
+
+// =====================================================
+//  ЭНЧАНТРИКС — обновление
+// =====================================================
+function updateKveikEnchantix(dt) {
+  // Откат
+  if (kveikEnchantixCooldown > 0) {
+    kveikEnchantixCooldown -= dt;
+    if (kveikEnchantixCooldown < 0) kveikEnchantixCooldown = 0;
+  }
+
+  if (!kveikEnchantixActive) return;
+
+  kveikTimer += dt;
+  const t = kveikTimer;
+
+  // ============ ФАЗА КАТСЦЕНЫ (13 сек) ============
+  if (kveikPhase === 'cutscene') {
+    const scene3d = kveikTransformScene;
+
+    // Пульс сферы
+    if (scene3d.sphere) {
+      const pulse = 1 + Math.sin(t * 2) * 0.05;
+      scene3d.sphere.scale.setScalar(pulse);
+      scene3d.sphere.material.opacity = 0.5 + Math.sin(t * 3) * 0.1;
+      scene3d.sphere.position.set(hero.x, 3, hero.z);
+    }
+
+    // Частицы вращаются вокруг героя
+    for (const p of scene3d.particles) {
+      p.userData.phase += dt * 1.5;
+      const a = p.userData.axis + p.userData.phase;
+      const r = p.userData.radius;
+      p.position.x = hero.x + Math.sin(p.userData.elevation) * Math.cos(a) * r;
+      p.position.z = hero.z + Math.sin(p.userData.elevation) * Math.sin(a) * r;
+      p.position.y = 3 + Math.cos(p.userData.elevation) * r * 0.7 + Math.sin(p.userData.phase * 2) * 0.3;
+    }
+
+    if (scene3d.light) {
+      scene3d.light.position.set(hero.x, 4, hero.z);
+      scene3d.light.intensity = 2.5 + Math.sin(t * 4) * 1.0;
+    }
+
+    // Камера вращается вокруг героя
+    kveikSpinAngle += dt * 0.6;
+    const camRadius = 5.5;
+    const camHeight = 2.5 + Math.sin(t * 0.8) * 0.5;
+    const camX = hero.x + Math.cos(kveikSpinAngle) * camRadius;
+    const camZ = hero.z + Math.sin(kveikSpinAngle) * camRadius;
+    camera.position.set(camX, camHeight, camZ);
+    camera.lookAt(hero.x, 1.9, hero.z);
+
+    // =================================================
+    //  ТАЙМЛАЙН КАТСЦЕНЫ (13 секунд)
+    //  0.0–1.0  — общий облёт, сфера формируется
+    //  1.0–3.5  — камера на голову, волосы розовые
+    //  3.5–6.5  — камера на руки, пыльца, фиолетовые рукава
+    //  6.5–9.5  — камера на ноги, красивая обувь
+    //  9.5–12.0 — камера отлетает, появляются крылья
+    //  12.0–13.0 — финальный ракурс
+    // =================================================
+    let camTargetX = hero.x;
+    let camTargetY = 2.7;   // по умолчанию — на уровне головы
+    let camTargetZ = hero.z;
+    let camPosX = hero.x + Math.cos(kveikSpinAngle) * camRadius;
+    let camPosY = camHeight;
+    let camPosZ = hero.z + Math.sin(kveikSpinAngle) * camRadius;
+
+    // ---- 1.0–3.5: крупный план головы, волосы розовеют ----
+    if (t >= 1.0 && t < 3.5) {
+      const p = Math.min(1, (t - 1.0) / 1.0);   // плавный переход камеры
+      // Подлетаем вплотную к голове, немного сверху
+      const headRadius = 1.6;
+      const headAngle = kveikSpinAngle * 0.6;
+      const targetCamX = hero.x + Math.cos(headAngle) * headRadius;
+      const targetCamZ = hero.z + Math.sin(headAngle) * headRadius;
+      const targetCamY = 2.9;
+      camPosX = camPosX * (1 - p) + targetCamX * p;
+      camPosY = camHeight * (1 - p) + targetCamY * p;
+      camPosZ = camPosZ * (1 - p) + targetCamZ * p;
+      camTargetX = hero.x;
+      camTargetY = 2.75;                        // голова
+      camTargetZ = hero.z;
+
+      // На 2.2 сек перекрашиваем волосы в розовый
+      if (t > 2.2 && currentCharacter && currentCharacter.showPinkHair) {
+        currentCharacter.showPinkHair();
+      }
+      // Магическая пыльца вокруг головы
+      if (t > 1.5 && t < 3.5 && Math.random() < 0.5) {
+        const a = Math.random() * Math.PI * 2;
+        const pr = 0.8 + Math.random() * 0.4;
+        const px = hero.x + Math.cos(a) * pr;
+        const pz = hero.z + Math.sin(a) * pr;
+        const py = 2.7 + (Math.random() - 0.5) * 0.6;
+        const spark = new THREE.Mesh(
+          new THREE.SphereGeometry(0.06, 6, 6),
+          new THREE.MeshBasicMaterial({ color: 0xffaaff, transparent: true, opacity: 0.9 })
+        );
+        spark.position.set(px, py, pz);
+        spark.userData = { vx: 0, vz: 0, life: 0.6 };
+        scene.add(spark);
+        particles.push(spark);
+      }
+    }
+
+    // ---- 3.5–6.5: камера на руки, пыльца, появляются фиолетовые рукава ----
+    else if (t >= 3.5 && t < 6.5) {
+      const localT = t - 3.5;
+      const p = Math.min(1, localT / 0.8);
+      const armAngle = kveikSpinAngle * 0.7 + 0.5;
+      const armRadius = 2.0;
+      const targetCamX = hero.x + Math.cos(armAngle) * armRadius;
+      const targetCamZ = hero.z + Math.sin(armAngle) * armRadius;
+      const targetCamY = 2.0;
+      camPosX = camPosX * (1 - p) + targetCamX * p;
+      camPosY = camPosY * (1 - p) + targetCamY * p;
+      camPosZ = camPosZ * (1 - p) + targetCamZ * p;
+      camTargetX = hero.x;
+      camTargetY = 1.95;                       // руки
+      camTargetZ = hero.z;
+
+      // Обильная волшебная пыльца вокруг рук (спираль)
+      if (localT < 2.5 && Math.random() < 0.85) {
+        const a = localT * 6 + Math.random() * 0.6;
+        const r = 0.6 + Math.random() * 0.4;
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const px = hero.x + side * 0.75 + Math.cos(a) * r * 0.5;
+        const py = 2.0 + Math.sin(a) * 0.5 + (Math.random() - 0.5) * 0.3;
+        const pz = hero.z + Math.sin(a) * r * 0.5;
+        const spark = new THREE.Mesh(
+          new THREE.SphereGeometry(0.08, 6, 6),
+          new THREE.MeshBasicMaterial({ color: 0xcc88ff, transparent: true, opacity: 0.95 })
+        );
+        spark.position.set(px, py, pz);
+        spark.userData = { vx: 0, vz: 0, life: 0.7 };
+        scene.add(spark);
+        particles.push(spark);
+      }
+
+      // Появление рукавов на 5.5 сек
+      if (t > 5.5 && currentCharacter && currentCharacter.showSleeves) {
+        currentCharacter.showSleeves();
+      }
+    }
+
+    // ---- 6.5–9.5: камера на ноги, появляется обувь ----
+    else if (t >= 6.5 && t < 9.5) {
+      const localT = t - 6.5;
+      const p = Math.min(1, localT / 0.8);
+      const legAngle = kveikSpinAngle * 0.8 + 1.5;
+      const legRadius = 1.8;
+      const targetCamX = hero.x + Math.cos(legAngle) * legRadius;
+      const targetCamZ = hero.z + Math.sin(legAngle) * legRadius;
+      const targetCamY = 0.9;
+      camPosX = camPosX * (1 - p) + targetCamX * p;
+      camPosY = camPosY * (1 - p) + targetCamY * p;
+      camPosZ = camPosZ * (1 - p) + targetCamZ * p;
+      camTargetX = hero.x;
+      camTargetY = 0.65;                       // ноги
+      camTargetZ = hero.z;
+
+      // Появление обуви на 8.3 сек
+      if (t > 8.3 && currentCharacter && currentCharacter.showBoots) {
+        currentCharacter.showBoots();
+      }
+    }
+
+    // ---- 9.5–12.0: камера отлетает, появляются крылья ----
+    else if (t >= 9.5 && t < 12.0) {
+      const localT = t - 9.5;
+      const p = Math.min(1, localT / 1.0);
+      const backAngle = kveikSpinAngle + Math.PI * (localT / 2.5);
+      const targetCamX = hero.x + Math.cos(backAngle) * camRadius;
+      const targetCamZ = hero.z + Math.sin(backAngle) * camRadius;
+      const targetCamY = camHeight;
+      camPosX = camPosX * (1 - p) + targetCamX * p;
+      camPosY = camPosY * (1 - p) + targetCamY * p;
+      camPosZ = camPosZ * (1 - p) + targetCamZ * p;
+      camTargetX = hero.x;
+      camTargetY = 1.9;
+      camTargetZ = hero.z;
+
+      // Крылья появляются на 10.5 сек
+      if (t > 10.5 && currentCharacter && currentCharacter.showWings) {
+        currentCharacter.showWings();
+      }
+      if (t > 10.5 && currentCharacter && currentCharacter.setFlyingPose) {
+        currentCharacter.setFlyingPose(t);
+      }
+
+      // Финальная вспышка
+      if (t > 11.7 && t - dt <= 11.7) {
+        burst(hero.x, hero.z, 0xffffff);
+        burst(hero.x, hero.z, 0xff88dd);
+      }
+    }
+
+    // ---- 12.0–13.0: финальный ракурс, лёгкий подъём героя ----
+    else if (t >= 12.0) {
+      const localT = t - 12.0;
+      const backAngle = kveikSpinAngle + Math.PI * 2 + localT * 1.2;
+      const targetCamX = hero.x + Math.cos(backAngle) * camRadius;
+      const targetCamZ = hero.z + Math.sin(backAngle) * camRadius;
+      camPosX = camPosX * 0.9 + targetCamX * 0.1;
+      camPosY = camPosY * 0.9 + (camHeight + 0.5) * 0.1;
+      camPosZ = camPosZ * 0.9 + targetCamZ * 0.1;
+      camTargetX = hero.x;
+      camTargetY = 2.0;
+      camTargetZ = hero.z;
+    }
+
+    // Применяем позицию камеры
+    camera.position.set(camPosX, camPosY, camPosZ);
+    camera.lookAt(camTargetX, camTargetY, camTargetZ);
+
+    // Плавное вращение героя
+    heroGroup.rotation.y += dt * 0.7;
+
+    // Конец катсцены
+    if (t >= KVEIK_CUTSCENE_DURATION) {
+      kveikPhase = 'flying';
+      kveikTimer = 0;
+      kveikBombTimer = KVEIK_BOMB_INTERVAL - 0.5;
+      enemiesFrozen = false;
+
+      // Убираем магическое пространство
+      if (kveikTransformScene.sphere) {
+        scene.remove(kveikTransformScene.sphere);
+        kveikTransformScene.sphere.geometry.dispose();
+        kveikTransformScene.sphere.material.dispose();
+        kveikTransformScene.sphere = null;
+      }
+      for (const p of kveikTransformScene.particles) {
+        scene.remove(p);
+        p.geometry.dispose();
+        p.material.dispose();
+      }
+      kveikTransformScene.particles = [];
+      if (kveikTransformScene.light) {
+        scene.remove(kveikTransformScene.light);
+        kveikTransformScene.light = null;
+      }
+
+      // Возвращаем оружие
+      for (const k in weaponMeshes) weaponMeshes[k].visible = true;
+
+      // Сбрасываем поворот героя
+      heroGroup.rotation.y = hero.attackAngle + Math.PI;
+
+      burst(hero.x, hero.z, 0xff88dd);
+    }
+
+    return;
+  }
+
+  // ============ ФАЗА ПОЛЁТА (10 сек) ============
+  if (kveikPhase === 'flying') {
+    // Квейк реально парит высоко над врагами
+    hero.height = 6.5;
+
+    // Машем крыльями
+    if (currentCharacter && currentCharacter.setFlyingPose) {
+      currentCharacter.setFlyingPose(t);
+    }
+
+    // ---- Враги под героем отталкиваются в стороны ----
+    // Создаётся ощущение, что он пролетает НАД ними, а не бежит сквозь них.
+    for (const e of enemies) {
+      if (e.dying || e.flyingToBoss) continue;
+      const dx = e.x - hero.x;
+      const dz = e.z - hero.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.2 && d > 0.1) {
+        // Мягко сдвигаем врага в сторону
+        const push = (2.2 - d) * 6 * dt;
+        e.x += (dx / d) * push;
+        e.z += (dz / d) * push;
+      }
+    }
+    // Босса тоже сдвигаем, если он внизу
+    if (boss.active) {
+      const dx = boss.x - hero.x;
+      const dz = boss.z - hero.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 3.5 && d > 0.1) {
+        const push = (3.5 - d) * 3 * dt;
+        boss.x += (dx / d) * push;
+        boss.z += (dz / d) * push;
+      }
+    }
+
+    // Бомбы раз в KVEIK_BOMB_INTERVAL секунд
+    kveikBombTimer += dt;
+    if (kveikBombTimer >= KVEIK_BOMB_INTERVAL) {
+      kveikBombTimer = 0;
+      // Сбрасываем бомбу в позицию ближайшего скопления врагов
+      let targetX = hero.x, targetZ = hero.z;
+      let bestCount = 0;
+      for (const e of enemies) {
+        if (e.dying) continue;
+        let cnt = 0;
+        for (const e2 of enemies) {
+          if (e2.dying) continue;
+          if (Math.hypot(e2.x - e.x, e2.z - e.z) < KVEIK_BOMB_RADIUS) cnt++;
+        }
+        if (cnt > bestCount) {
+          bestCount = cnt;
+          targetX = e.x;
+          targetZ = e.z;
+        }
+      }
+      // Если врагов нет — просто под героя
+      spawnKveikBomb(hero.x, hero.z, targetX, targetZ);
+    }
+
+    // Конец полёта
+    if (t >= KVEIK_FLYING_DURATION) {
+      kveikPhase = 'ending';
+      kveikTimer = 0;
+
+      // Отталкиваем врагов вокруг
+      for (const e of enemies) {
+        const dx = e.x - hero.x;
+        const dz = e.z - hero.z;
+        const d = Math.hypot(dx, dz);
+        if (d < KVEIK_END_PUSH_RADIUS && d > 0.1) {
+          e.kbX = (dx / d) * KVEIK_END_PUSH_FORCE;
+          e.kbZ = (dz / d) * KVEIK_END_PUSH_FORCE;
+        }
+      }
+
+      burst(hero.x, hero.z, 0xff88dd);
+      burst(hero.x, hero.z, 0x88ddff);
+      cameraShake(0.3);
+    }
+
+    return;
+  }
+
+  // ============ ФАЗА ЗАВЕРШЕНИЯ (0.5 сек) ============
+  if (kveikPhase === 'ending') {
+    if (t >= 0.5) {
+      kveikPhase = 'none';
+      kveikEnchantixActive = false;
+      kveikEnchantixCooldown = KVEIK_COOLDOWN;
+      hero.height = 0;
+
+      if (currentCharacter && currentCharacter.hideCostume) {
+        currentCharacter.hideCostume();
+        currentCharacter.hideWings();
+      }
+    }
+    return;
+  }
+}
+
+// =====================================================
+//  БОМБЫ КВЕЙКА
+// =====================================================
+function spawnKveikBomb(fromX, fromZ, targetX, targetZ) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.35, 12, 10),
+    new THREE.MeshBasicMaterial({ color: 0xff88dd })
+  );
+  mesh.position.set(fromX, 4.5, fromZ);
+  scene.add(mesh);
+
+  // Хвостик
+  const tail = new THREE.Mesh(
+    new THREE.ConeGeometry(0.22, 0.5, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd966 })
+  );
+  tail.position.y = 0.35;
+  mesh.add(tail);
+
+  kveikBombs.push({
+    mesh,
+    x: fromX, z: fromZ, y: 4.5,
+    targetX, targetZ,
+    damage: stats.damage * KVEIK_BOMB_DMG_MULT,
+    landed: false,
+    timer: 0,
+  });
+}
+
+function updateKveikBombs(dt) {
+  for (let i = kveikBombs.length - 1; i >= 0; i--) {
+    const b = kveikBombs[i];
+    b.timer += dt;
+
+    if (!b.landed) {
+      // Летит к цели
+      const dx = b.targetX - b.x;
+      const dz = b.targetZ - b.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const speed = 14;
+      const stepX = (dx / d) * speed * dt;
+      const stepZ = (dz / d) * speed * dt;
+      b.x += stepX;
+      b.z += stepZ;
+      b.y -= 6 * dt;   // падает вниз
+
+      if (b.y <= 0.3 || Math.hypot(b.targetX - b.x, b.targetZ - b.z) < 0.5) {
+        b.landed = true;
+        b.y = 0.3;
+        b.timer = 0;
+        // Взрыв
+        explodeKveikBomb(b);
+      }
+      b.mesh.position.set(b.x, b.y, b.z);
+      b.mesh.rotation.x += dt * 8;
+      b.mesh.rotation.y += dt * 6;
+    } else {
+      // После взрыва убираем
+      if (b.timer > 0.5) {
+        scene.remove(b.mesh);
+        b.mesh.traverse(o => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+        kveikBombs.splice(i, 1);
+      }
+    }
+  }
+}
+
+function explodeKveikBomb(b) {
+  const R = KVEIK_BOMB_RADIUS;
+  const dmg = b.damage;
+
+  // Урон
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.dying) continue;
+    const d = Math.hypot(e.x - b.x, e.z - b.z);
+    if (d < R + e.r) {
+      e.hp -= dmg;
+      if (e.hp <= 0) killEnemy(e, i);
+    }
+  }
+  if (boss.active) {
+    const d = Math.hypot(boss.x - b.x, boss.z - b.z);
+    if (d < R + boss.r) damageBoss(dmg);
+  }
+  for (let k = statues.length - 1; k >= 0; k--) {
+    const s = statues[k];
+    const d = Math.hypot(s.x - b.x, s.z - b.z);
+    if (d < R + s.r) damageStatue(s, k, dmg);
+  }
+
+  // Визуал — розовая вспышка и расширяющееся кольцо
+  const ringGeo = new THREE.RingGeometry(R * 0.2, R, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xff88dd, transparent: true, opacity: 1,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(b.x, 0.15, b.z);
+  scene.add(ring);
+
+  const start = performance.now();
+  (function animRing() {
+    const t = (performance.now() - start) / 500;
+    if (t >= 1) {
+      scene.remove(ring);
+      ring.geometry.dispose();
+      ring.material.dispose();
+      return;
+    }
+    ring.scale.setScalar(1 + t * 0.6);
+    ringMat.opacity = 1 - t;
+    requestAnimationFrame(animRing);
+  })();
+
+  for (let i = 0; i < 4; i++) burst(b.x, b.z, 0xff88dd);
+  burst(b.x, b.z, 0x88ddff);
+  cameraShake(0.2);
 }
 
 // =====================================================
@@ -4400,7 +5054,9 @@ addEventListener('keydown', e => {
 
   if (c === 'KeyQ') {
     if (gameActive && !paused) {
-      if (currentCharacter && currentCharacter.isQuicks) {
+      if (currentCharacter && currentCharacter.isKveik) {
+        tryActivateKveikEnchantix();
+      } else if (currentCharacter && currentCharacter.isQuicks) {
         tryActivateQuicksTeleport();
       } else if (currentCharacter && currentCharacter.isRoller) {
         tryActivateKolobokBerserk();
@@ -5550,8 +6206,97 @@ let lastJumpAttack = 0;
 
 function doAttack() {
   if (lucksMaxingActive) return;
+  if (kveikEnchantixActive) return;
 
   const now = performance.now();
+
+  // ============================================================
+  //  КВЕЙК — рассекающие горизонтальные волны
+  // ============================================================
+  if (currentCharacter && currentCharacter.isKveik) {
+    // Во время полёта Энчантрикс обычная атака недоступна
+    if (kveikEnchantixActive) return;
+
+    const isJumpAttack = hero.isJumping && hero.height > 0.3;
+    if (isJumpAttack) {
+      if (now - lastJumpAttack < 350) return;
+      lastJumpAttack = now;
+    } else {
+      if (now - lastAttack < stats.cooldown) return;
+      lastAttack = now;
+    }
+
+    hero.attackTimer = 0.18;
+
+    // Направление — на ближайшего врага
+    let nearest = null, nd = Infinity;
+    for (const e of enemies) {
+      if (e.dying || e.flyingToBoss) continue;
+      const d = Math.hypot(e.x - hero.x, e.z - hero.z);
+      if (d < nd) { nd = d; nearest = e; }
+    }
+    if (boss.active) {
+      const bd = Math.hypot(boss.x - hero.x, boss.z - hero.z);
+      if (bd < nd) { nd = bd; nearest = { x: boss.x, z: boss.z }; }
+    }
+    if (nearest) hero.attackAngle = Math.atan2(nearest.z - hero.z, nearest.x - hero.x);
+
+    // Рассекающая волна — тот же урон, что и обычная атака Грифони
+    const dmg = stats.damage;
+    const radius = stats.radius + (isJumpAttack ? JUMP_ATTACK_RADIUS_BONUS : 0);
+
+    // Урон — как обычно по сектору
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.dying || e.flyingToBoss) continue;
+      const dx = e.x - hero.x;
+      const dz = e.z - hero.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > radius + e.r) continue;
+
+      let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
+      diff = Math.min(diff, Math.PI * 2 - diff);
+      if (diff > 1.15) continue;
+
+      const finalDmg = isJumpAttack
+        ? dmg * (1 + Math.min(1, hero.height / JUMP_HEIGHT) * (JUMP_ATTACK_MULT - 1))
+        : dmg;
+
+      e.hp -= finalDmg;
+      e.kbX = Math.cos(Math.atan2(dz, dx)) * 10;
+      e.kbZ = Math.sin(Math.atan2(dz, dx)) * 10;
+      if (e.hp <= 0) killEnemy(e, i);
+    }
+
+    // Босс
+    if (boss.active) {
+      const dx = boss.x - hero.x;
+      const dz = boss.z - hero.z;
+      if (Math.hypot(dx, dz) < radius + boss.r) {
+        let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
+        diff = Math.min(diff, Math.PI * 2 - diff);
+        if (diff <= 1.15) damageBoss(dmg);
+      }
+    }
+
+    // Статуи
+    for (let i = statues.length - 1; i >= 0; i--) {
+      const s = statues[i];
+      const dx = s.x - hero.x;
+      const dz = s.z - hero.z;
+      if (Math.hypot(dx, dz) < radius + s.r) {
+        let diff = Math.abs(Math.atan2(dz, dx) - hero.attackAngle);
+        diff = Math.min(diff, Math.PI * 2 - diff);
+        if (diff <= 1.15) damageStatue(s, i, dmg);
+      }
+    }
+
+    // Визуал — горизонтальная рассекающая волна (две дуги, летящие вперёд)
+    spawnKveikWaveEffect(hero.x, hero.z, hero.attackAngle, radius);
+
+    return;
+  }
+
 
   // ============================================================
   //  КВИКС — атака
@@ -6758,7 +7503,8 @@ function updateGasHud() {
   const isRoller = currentCharacter && currentCharacter.isRoller;
   const isShishkun = currentCharacter && currentCharacter.doubleSector;
   const isQuicks = currentCharacter && currentCharacter.isQuicks;
-  if (isRoller || isShishkun || isQuicks || level < GAS_UNLOCK_LEVEL) {
+  const isKveik = currentCharacter && currentCharacter.isKveik;
+  if (isRoller || isShishkun || isQuicks || isKveik || level < GAS_UNLOCK_LEVEL) {
     if (gasHudEl.style.display !== 'none') {
       gasHudEl.style.display = 'none';
       _lastGasHudText = '';
@@ -7341,6 +8087,94 @@ function updateQuicksHud() {
   }
 }
 
+const kveikHudEl = (function createKveikHud() {
+  const style = document.createElement('style');
+  style.textContent = `
+    #kveikHud {
+      position: fixed;
+      bottom: 190px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(50, 20, 60, 0.88);
+      border: 3px solid #ff88dd;
+      border-radius: 20px;
+      padding: 8px 22px;
+      color: #ffd0f0;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-weight: 900;
+      font-size: 16px;
+      z-index: 60;
+      display: none;
+      letter-spacing: 1px;
+      box-shadow: 0 0 22px rgba(255, 136, 221, 0.5);
+      text-shadow: 2px 2px 0 #000;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #kveikHud.ready { animation: kveikPulse 1.2s ease-in-out infinite; }
+    #kveikHud.active {
+      background: rgba(80, 30, 100, 0.95);
+      color: #ffffff;
+      border-color: #88ddff;
+      animation: none;
+      box-shadow: 0 0 40px rgba(170, 200, 255, 1);
+    }
+    @keyframes kveikPulse {
+      0%, 100% { box-shadow: 0 0 22px rgba(255, 136, 221, 0.5); }
+      50%      { box-shadow: 0 0 40px rgba(255, 136, 221, 1); }
+    }
+  `;
+  document.head.appendChild(style);
+  const el = document.createElement('div');
+  el.id = 'kveikHud';
+  document.body.appendChild(el);
+  return el;
+})();
+
+let _lastKveikHudText = '';
+function updateKveikHud() {
+  if (mobileControlsCreated) {
+    if (kveikHudEl.style.display !== 'none') {
+      kveikHudEl.style.display = 'none';
+      _lastKveikHudText = '';
+    }
+    return;
+  }
+  const isKveik = currentCharacter && currentCharacter.isKveik;
+  if (!isKveik || level < KVEIK_UNLOCK_LEVEL) {
+    if (kveikHudEl.style.display !== 'none') {
+      kveikHudEl.style.display = 'none';
+      _lastKveikHudText = '';
+    }
+    return;
+  }
+
+  let text, cls;
+  if (kveikEnchantixActive) {
+    if (kveikPhase === 'cutscene') {
+      text = `✨ ЭНЧАНТРИКС...`;
+    } else if (kveikPhase === 'flying') {
+      text = `✨ ПОЛЁТ! ${(KVEIK_FLYING_DURATION - kveikTimer).toFixed(1)}с`;
+    } else {
+      text = `✨ Завершение...`;
+    }
+    cls = 'active';
+  } else if (kveikEnchantixCooldown > 0) {
+    text = `✨ Энчантрикс: ${kveikEnchantixCooldown.toFixed(1)}с`;
+    cls = '';
+  } else {
+    text = `✨ Q — ЭНЧАНТРИКС`;
+    cls = 'ready';
+  }
+
+  if (text !== _lastKveikHudText || kveikHudEl.className !== cls) {
+    kveikHudEl.textContent = text;
+    kveikHudEl.className = cls;
+    kveikHudEl.style.display = 'block';
+    _lastKveikHudText = text;
+  }
+}
+
 // =====================================================
 //  МОБИЛЬНАЯ КНОПКА СПОСОБНОСТИ — иконка + кулдаун + таймер
 // =====================================================
@@ -7354,7 +8188,24 @@ function updateMobileAbilityButton() {
   let icon = '🔥';
 
   if (currentCharacter) {
-    if (currentCharacter.isQuicks) {
+    if (currentCharacter.isKveik) {
+      icon = '✨';
+      if (level >= KVEIK_UNLOCK_LEVEL) {
+        if (kveikEnchantixActive) {
+          state = 'active';
+          total = KVEIK_CUTSCENE_DURATION + KVEIK_FLYING_DURATION;
+          remaining = kveikPhase === 'cutscene'
+            ? (KVEIK_CUTSCENE_DURATION - kveikTimer) + KVEIK_FLYING_DURATION
+            : KVEIK_FLYING_DURATION - kveikTimer;
+        } else if (kveikEnchantixCooldown > 0) {
+          state = 'cooldown';
+          total = KVEIK_COOLDOWN;
+          remaining = kveikEnchantixCooldown;
+        } else {
+          state = 'ready';
+        }
+      }
+    } else if (currentCharacter.isQuicks) {
       icon = '⚡';
       if (level >= QUICKS_TELEPORT_UNLOCK) {
         if (quicksTeleportReady) {
@@ -8506,7 +9357,8 @@ function loop(now) {
     // Движение героя
     let mx = 0, mz = 0;
     const inLuckCutscene = lucksMaxingActive && lucksMaxingPhase === 'cutscene';
-    if (!hammerSlamState.active && !inLuckCutscene) {
+    const inKveikCutscene = kveikEnchantixActive && kveikPhase === 'cutscene';
+    if (!hammerSlamState.active && !inLuckCutscene && !inKveikCutscene) {
       if (keys.w || keys.up) mz -= 1;
       if (keys.s || keys.down) mz += 1;
       if (keys.a || keys.left) mx -= 1;
@@ -8521,9 +9373,12 @@ function loop(now) {
     if (mx || mz) {
       const l = Math.hypot(mx, mz);
       let speedMul = heroTransformTimer > 0 ? heroTransformSpeedMult : 1;
-      // Луксмаксинг — езда на машине быстрее
       if (lucksMaxingActive && lucksMaxingPhase === 'driving') {
         speedMul *= LUCK_CAR_SPEED_MULT;
+      }
+      // Квейк в полёте — быстрее
+      if (kveikEnchantixActive && kveikPhase === 'flying') {
+        speedMul *= KVEIK_FLYING_SPEED_MULT;
       }
       const curSpeed = stats.speed * speedMul;
       const nx = hero.x + (mx / l) * curSpeed * dt;
@@ -8609,6 +9464,9 @@ function loop(now) {
     updateQuicksMissiles(dt);
     updateQuicksFrostZones(dt);
     updateQuicksHud();
+    updateKveikEnchantix(dt);
+    updateKveikBombs(dt);
+    updateKveikHud();
     updateCompassEffects(dt);
     updatePlasticineMen(dt);
     updatePlasticineHud();
@@ -8881,6 +9739,11 @@ function loop(now) {
         ud.pupilR.position.z = 0.24 + oz * 0.2;
       }
 
+            // Во время полёта Квейка враги не могут его достать
+      if (kveikEnchantixActive && kveikPhase === 'flying') {
+        continue; // пропускаем весь код урона/движения к игроку
+      }
+
       // ---- Контакт с целью ----
       if (targetManRef) {
         // Бьёт человечка — только если он не в стадии неуязвимости
@@ -8945,7 +9808,8 @@ function loop(now) {
   }
 
   updateAttackIndicator();
-  if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene')) {
+  const kveikCutscene = kveikEnchantixActive && kveikPhase === 'cutscene';
+  if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene') && !kveikCutscene) {
     updateCamera();
   }
   renderer.render(scene, camera);
@@ -9056,6 +9920,53 @@ function reset() {
   });
   plasticineMen.length = 0;
   updatePlasticineHud();
+    // Сброс Энчантрикс
+  kveikEnchantixActive = false;
+  kveikEnchantixCooldown = 0;
+  kveikPhase = 'none';
+  kveikTimer = 0;
+  kveikBombTimer = 0;
+  _lastKveikHudText = '';
+
+  // Убираем магическую сферу и частицы
+  if (kveikTransformScene.sphere) {
+    scene.remove(kveikTransformScene.sphere);
+    kveikTransformScene.sphere.geometry.dispose();
+    kveikTransformScene.sphere.material.dispose();
+    kveikTransformScene.sphere = null;
+  }
+  for (const p of kveikTransformScene.particles) {
+    scene.remove(p);
+    p.geometry.dispose();
+    p.material.dispose();
+  }
+  kveikTransformScene.particles = [];
+  if (kveikTransformScene.light) {
+    scene.remove(kveikTransformScene.light);
+    kveikTransformScene.light = null;
+  }
+
+  // Убираем бомбы
+  for (const b of kveikBombs) {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  kveikBombs.length = 0;
+
+  // Возвращаем оружие и прячем костюм
+  for (const k in weaponMeshes) weaponMeshes[k].visible = true;
+  if (currentCharacter && currentCharacter.hideCostume) {
+    currentCharacter.hideCostume();
+    currentCharacter.hideWings();
+  }
+
+  try {
+    transformMusic.pause();
+    transformMusic.currentTime = 0;
+  } catch (e) {}
   heroTransformTimer = 0;
   heroTransformMaxDuration = 1;
   heroTransformDamageMult = 1.0;
@@ -9775,7 +10686,9 @@ function createMobileControls() {
   btnBerserk.addEventListener('touchstart', e => {
     e.preventDefault();
     btnBerserk.classList.add('pressed');
-    if (currentCharacter && currentCharacter.isQuicks) {
+    if (currentCharacter && currentCharacter.isKveik) {
+      tryActivateKveikEnchantix();
+    } else if (currentCharacter && currentCharacter.isQuicks) {
       tryActivateQuicksTeleport();
     } else if (currentCharacter && currentCharacter.isRoller) {
       tryActivateKolobokBerserk();

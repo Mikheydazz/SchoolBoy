@@ -1085,6 +1085,385 @@ function buildQuicks() {
 }
 
 // =====================================================
+//  КВЕЙК — высокий мальчик с чёлкой, закрывающей глаза
+// =====================================================
+function buildKveik(skinId) {
+  const group = new THREE.Group();
+
+  const skinMat  = new THREE.MeshLambertMaterial({ color: 0xe8c8a0 });
+  const hairMat  = new THREE.MeshLambertMaterial({ color: 0x0a0a0a });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const pantsMat = new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
+  const shoeMat  = new THREE.MeshLambertMaterial({ color: 0x151515 });
+  const eyeMat   = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a0a0a });
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0x1a1a2a });
+
+  // ===== Ноги =====
+  function makeLeg(side) {
+    const leg = new THREE.Group();
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.7, 6, 12), pantsMat);
+    thigh.position.y = -0.45;
+    thigh.castShadow = true;
+    leg.add(thigh);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, 0.52), shoeMat);
+    shoe.position.set(0, -0.95, 0.1);
+    shoe.castShadow = true;
+    leg.add(shoe);
+    leg.position.set(side * 0.25, 1.05, 0);
+    return leg;
+  }
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+  group.add(legL, legR);
+
+  // ===== Торс — среднего телосложения =====
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 0.6, 8, 14), shirtMat);
+  torso.position.y = 1.75;
+  torso.scale.set(0.92, 1.0, 0.68);
+  torso.castShadow = true;
+  group.add(torso);
+
+  // ===== Руки =====
+  function makeArm(side) {
+    const arm = new THREE.Group();
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.55, 6, 10), shirtMat);
+    upper.position.y = -0.3;
+    upper.castShadow = true;
+    arm.add(upper);
+    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.5, 6, 10), skinMat);
+    forearm.position.y = -0.85;
+    forearm.castShadow = true;
+    arm.add(forearm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), skinMat);
+    hand.position.y = -1.2;
+    arm.add(hand);
+    arm.position.set(side * 0.58, 2.15, 0);
+    arm.rotation.z = side * 0.12;
+    return arm;
+  }
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+  group.add(armL, armR);
+
+  // ===== Голова =====
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), skinMat);
+  head.position.y = 2.7;
+  head.castShadow = true;
+  group.add(head);
+
+  // ===== Волосы — пышная кудрявая шапка без чёлки =====
+  const hairGroup = new THREE.Group();
+  hairGroup.position.y = 2.7;
+
+  // Основной купол — только верхняя полусфера, лицо не трогает
+  const hairCap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.54, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    hairMat
+  );
+  hairCap.position.y = 0.08;
+  hairCap.scale.set(1.02, 1.05, 1.02);
+  hairCap.castShadow = true;
+  hairGroup.add(hairCap);
+
+  // Крупные кудри по всей поверхности шапки — создают объём и форму
+  const curlPositions = [
+    [ 0.00, 0.42,  0.00, 0.26],   // макушка
+    [ 0.26, 0.36,  0.10, 0.24],   // спереди-слева
+    [-0.26, 0.36,  0.10, 0.24],   // спереди-справа
+    [ 0.40, 0.22, -0.05, 0.22],   // слева сбоку
+    [-0.40, 0.22, -0.05, 0.22],   // справа сбоку
+    [ 0.30, 0.32, -0.30, 0.22],   // зад-слева
+    [-0.30, 0.32, -0.30, 0.22],   // зад-справа
+    [ 0.00, 0.30, -0.42, 0.26],   // сзади
+    [ 0.15, 0.42, -0.15, 0.20],   // верх-сзади
+    [-0.15, 0.42, -0.15, 0.20],   // верх-сзади
+  ];
+  for (const [cx, cy, cz, cr] of curlPositions) {
+    const curl = new THREE.Mesh(
+      new THREE.SphereGeometry(cr, 14, 12),
+      hairMat
+    );
+    curl.position.set(cx, cy, cz);
+    curl.castShadow = true;
+    hairGroup.add(curl);
+  }
+
+  // Боковые пряди — маленькие кудри у висков, лицо не закрывают
+  const sideCurlL = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
+  sideCurlL.position.set(-0.44, 0.06, 0.06);
+  sideCurlL.scale.set(0.9, 1.3, 0.9);
+  hairGroup.add(sideCurlL);
+
+  const sideCurlR = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
+  sideCurlR.position.set(0.44, 0.06, 0.06);
+  sideCurlR.scale.set(0.9, 1.3, 0.9);
+  hairGroup.add(sideCurlR);
+
+  group.add(hairGroup);
+
+  // Глаза за чёлкой — почти не видны
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), eyeMat);
+  eyeL.position.set(-0.16, 2.7, 0.36);
+  group.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.16;
+  group.add(eyeR);
+  const pupilL = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), pupilMat);
+  pupilL.position.set(-0.16, 2.7, 0.44);
+  group.add(pupilL);
+  const pupilR = pupilL.clone();
+  pupilR.position.x = 0.16;
+  group.add(pupilR);
+
+  // Рот — тонкая линия
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.1, 0.02, 5, 12, Math.PI),
+    pupilMat
+  );
+  mouth.position.set(0, 2.5, 0.38);
+  mouth.rotation.z = Math.PI;
+  group.add(mouth);
+
+  // ===== Контейнер для магического костюма =====
+  // Группа всегда видима — скрываются только сами элементы костюма по отдельности.
+  const costumeGroup = new THREE.Group();
+  group.add(costumeGroup);
+
+  // Порядок: 0–1 = рукава L/R, 2–3 = обувь L/R
+  const costumeParts = [];
+
+  // Координаты рук в системе координат группы персонажа:
+  // arm.position = (side * 0.75, 2.15, 0),
+  // внутри руки: upper (capsule) на y=-0.3, forearm на y=-0.85, hand на y=-1.2
+  // Значит средняя часть руки находится в мире на y ≈ 2.15 - 0.55 ≈ 1.6.
+  // Рукав должен идти от плеча к запястью — от y=2.0 до y=1.2, центр 1.6.
+
+  // 1. Фиолетовые рукава на левой и правой руке
+  const sleeveMat = new THREE.MeshLambertMaterial({
+    color: 0x8833cc, emissive: 0x441166,
+  });
+
+  // Рукав левый — точно по руке (та же X, тот же наклон)
+  const sleeveL = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
+    sleeveMat
+  );
+  sleeveL.position.set(-0.58, 1.55, 0);
+  sleeveL.rotation.z = -0.12;
+  sleeveL.visible = false;
+  costumeGroup.add(sleeveL);
+  costumeParts.push(sleeveL);
+
+  // Рукав правый
+  const sleeveR = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
+    sleeveMat
+  );
+  sleeveR.position.set(0.58, 1.55, 0);
+  sleeveR.rotation.z = 0.12;
+  sleeveR.visible = false;
+  costumeGroup.add(sleeveR);
+  costumeParts.push(sleeveR);
+
+  // 2. Красивая обувь — глянцевые блестящие сапожки
+  // Координаты ног: leg.position = (side * 0.25, 1.05, 0),
+  // внутри: thigh на y=-0.45 (то есть в мире ~0.6),
+  // shoe на y=-0.95 (в мире ~0.1).
+  // Обувь должна быть на y ≈ 0.1, чуть ниже, чтобы обхватывала ступню.
+  const bootMat = new THREE.MeshLambertMaterial({
+    color: 0x9966ff, emissive: 0x331166,
+  });
+
+  // Сапог левый — от ступни вверх до голени
+  const bootL = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.55, 0.62),
+    bootMat
+  );
+  bootL.position.set(-0.25, 0.35, 0.08);
+  bootL.visible = false;
+  costumeGroup.add(bootL);
+  costumeParts.push(bootL);
+
+  // Сапог правый
+  const bootR = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.55, 0.62),
+    bootMat
+  );
+  bootR.position.set(0.25, 0.35, 0.08);
+  bootR.visible = false;
+  costumeGroup.add(bootR);
+  costumeParts.push(bootR);
+
+  // Голенища — верхняя часть сапога чуть выше
+  const shinL = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
+    bootMat
+  );
+  shinL.position.set(-0.25, 0.8, 0);
+  shinL.visible = false;
+  costumeGroup.add(shinL);
+  costumeParts.push(shinL);
+
+  const shinR = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
+    bootMat
+  );
+  shinR.position.set(0.25, 0.8, 0);
+  shinR.visible = false;
+  costumeGroup.add(shinR);
+  costumeParts.push(shinR);
+
+  // 6. Розовые волосы (энчантрикс) — та же форма, другой цвет
+  const hairCostumeMat = new THREE.MeshLambertMaterial({
+    color: 0xff88dd, emissive: 0x662266,
+  });
+  const hairCostumeGroup = new THREE.Group();
+  hairCostumeGroup.visible = false;
+  hairCostumeGroup.position.y = 2.7;
+
+  const hairCapPink = new THREE.Mesh(
+    new THREE.SphereGeometry(0.54, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    hairCostumeMat
+  );
+  hairCapPink.position.y = 0.08;
+  hairCapPink.scale.set(1.03, 1.07, 1.03);
+  hairCostumeGroup.add(hairCapPink);
+
+  for (const [cx, cy, cz, cr] of curlPositions) {
+    const curl = new THREE.Mesh(
+      new THREE.SphereGeometry(cr * 1.05, 14, 12),
+      hairCostumeMat
+    );
+    curl.position.set(cx, cy, cz);
+    hairCostumeGroup.add(curl);
+  }
+
+  const sideCurlLPink = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairCostumeMat);
+  sideCurlLPink.position.set(-0.44, 0.06, 0.06);
+  sideCurlLPink.scale.set(0.95, 1.35, 0.95);
+  hairCostumeGroup.add(sideCurlLPink);
+
+  const sideCurlRPink = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairCostumeMat);
+  sideCurlRPink.position.set(0.44, 0.06, 0.06);
+  sideCurlRPink.scale.set(0.95, 1.35, 0.95);
+  hairCostumeGroup.add(sideCurlRPink);
+
+  group.add(hairCostumeGroup);
+
+  // ===== Крылья (появляются в конце катсцены) =====
+  const wingsGroup = new THREE.Group();
+  wingsGroup.visible = false;
+  wingsGroup.position.set(0, 2.0, -0.3);
+
+  const wingMat = new THREE.MeshLambertMaterial({
+    color: 0xaaddff,
+    emissive: 0x4488bb,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+  });
+
+  // Форма крыла — плоский «лепесток» из Shape
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0, 0);
+  wingShape.bezierCurveTo(0.2, 0.4, 0.6, 0.9, 1.5, 1.2);
+  wingShape.bezierCurveTo(1.6, 0.8, 1.4, 0.3, 1.0, -0.1);
+  wingShape.bezierCurveTo(0.8, -0.4, 0.4, -0.3, 0, 0);
+  const wingGeo = new THREE.ShapeGeometry(wingShape, 20);
+
+  // Правое крыло — растёт вправо-вверх от спины
+  const wingR = new THREE.Mesh(wingGeo, wingMat);
+  wingR.position.set(0.1, 0.2, 0);
+  wingR.rotation.z = 0.4;     // наклон вверх
+  wingR.scale.set(1, 1, 1);
+  wingsGroup.add(wingR);
+
+  // Левое крыло — зеркальная копия через scale.x = -1
+  const wingL = new THREE.Mesh(wingGeo, wingMat);
+  wingL.position.set(-0.1, 0.2, 0);
+  wingL.rotation.z = 0.4;
+  wingL.scale.set(-1, 1, 1);
+  wingsGroup.add(wingL);
+
+  group.add(wingsGroup);
+
+  return {
+    group,
+    isRoller: false,
+    isKveik: true,
+    setWalk(phase) {
+      const swing = Math.sin(phase) * 0.4;
+      legL.rotation.x = swing;
+      legR.rotation.x = -swing;
+      armL.rotation.x = -swing * 0.7;
+      armR.rotation.x = swing * 0.7;
+      torso.position.y = 1.75 + Math.abs(Math.sin(phase)) * 0.05;
+    },
+    setJump(attackActive) {
+      legL.rotation.x = -0.85;
+      legR.rotation.x = -0.85;
+      armL.rotation.x = -1.4;
+      if (!attackActive) armR.rotation.x = -1.4;
+      torso.position.y = 1.75;
+    },
+    setAttack(progress) {
+      // Обе руки разводятся горизонтально — «рассекающие волны»
+      armL.rotation.x = -0.6 * progress;
+      armL.rotation.z = 0.1 + 0.9 * progress;
+      armR.rotation.x = -0.6 * progress;
+      armR.rotation.z = -0.1 - 0.9 * progress;
+    },
+    applyTransform() {
+      // От молота — очки
+      hairGroup.visible = false;
+      // Ничего не делаем с костюмом
+    },
+    revertTransform() {
+      hairGroup.visible = true;
+    },
+    // Управление частями костюма
+    showSleeves() {
+      if (costumeParts[0]) costumeParts[0].visible = true;
+      if (costumeParts[1]) costumeParts[1].visible = true;
+    },
+    showBoots() {
+      // Индексы 2–5 — это bootL, bootR, shinL, shinR
+      for (let i = 2; i < 6; i++) {
+        if (costumeParts[i]) costumeParts[i].visible = true;
+      }
+    },
+    showPinkHair() {
+      hairGroup.visible = false;
+      hairCostumeGroup.visible = true;
+    },
+    showWings() {
+      wingsGroup.visible = true;
+    },
+    hideWings() {
+      wingsGroup.visible = false;
+    },
+    hideCostume() {
+      for (const p of costumeParts) p.visible = false;
+      hairCostumeGroup.visible = false;
+      hairGroup.visible = true;
+      wingsGroup.visible = false;
+    },
+    wingsGroup,
+    setFlyingPose(t) {
+      // Поза в полёте: слегка наклонена, крылья машут
+      const flap = Math.sin(t * 12) * 0.35;
+      wingsGroup.children[0].rotation.z = -0.3 + flap;
+      wingsGroup.children[1].rotation.z = -0.3 - flap;
+      legL.rotation.x = -0.15;
+      legR.rotation.x = -0.15;
+      armL.rotation.x = -0.3;
+      armR.rotation.x = -0.3;
+    },
+  };
+}
+
+// =====================================================
 //  РЕЕСТР ПЕРСОНАЖЕЙ
 // =====================================================
 export const CHARACTERS = [
@@ -1138,11 +1517,11 @@ export const CHARACTERS = [
     },
     build: buildShishkun,
   },
-    {
+  {
     id: 'quicks',
     name: 'Квикс',
     emoji: '🤖',
-    desc: 'Маленький робот-изобретатель. Кидает самонаводящиеся ракеты в ближайших врагов. Телепортируется и имеет встроенный щит.',
+    desc: 'Маленький робот-изобретатель. Кидает самонаводящиеся ракеты. Телепортируется и имеет встроенный щит.',
     stats: {
       maxHp: 90,
       speed: 9,
@@ -1154,5 +1533,22 @@ export const CHARACTERS = [
       jumpCooldown: 2000,
     },
     build: buildQuicks,
+  },
+  {
+    id: 'kveik',
+    name: 'Квейк',
+    emoji: '✨',
+    desc: 'Высокий мальчик с чёлкой. Бьёт горизонтальными рассекающими волнами. На 5 ур. превращается в фею и летает над врагами.',
+    stats: {
+      maxHp: 100,
+      speed: 8,
+      damage: 9,
+      radius: 3.2,
+      cooldown: 700,
+      regen: 0,
+      magnet: 2.5,
+      jumpCooldown: 2000,
+    },
+    build: buildKveik,
   },
 ];
