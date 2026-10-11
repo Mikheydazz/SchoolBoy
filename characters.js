@@ -1088,13 +1088,20 @@ function buildQuicks() {
 //  КВЕЙК — высокий мальчик с чёлкой, закрывающей глаза
 // =====================================================
 function buildKveik(skinId) {
+  const isSelfExpression = skinId === 'self_expression';
   const group = new THREE.Group();
 
   const skinMat  = new THREE.MeshLambertMaterial({ color: 0xe8c8a0 });
   const hairMat  = new THREE.MeshLambertMaterial({ color: 0x0a0a0a });
-  const shirtMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-  const pantsMat = new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
-  const shoeMat  = new THREE.MeshLambertMaterial({ color: 0x151515 });
+  const shirtMat = isSelfExpression
+    ? new THREE.MeshLambertMaterial({ color: 0x1a1a1a })
+    : new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const pantsMat = isSelfExpression
+    ? new THREE.MeshLambertMaterial({ color: 0x8833cc })
+    : new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
+  const shoeMat  = isSelfExpression
+    ? new THREE.MeshLambertMaterial({ color: 0xf0f0f0 })
+    : new THREE.MeshLambertMaterial({ color: 0x151515 });
   const eyeMat   = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a0a0a });
   const glassMat = new THREE.MeshLambertMaterial({ color: 0x1a1a2a });
@@ -1123,6 +1130,39 @@ function buildKveik(skinId) {
   torso.scale.set(0.92, 1.0, 0.68);
   torso.castShadow = true;
   group.add(torso);
+
+  // Фиолетовые полоски на груди — только для скина «Самовыражение»
+  if (isSelfExpression) {
+    const stripeMat = new THREE.MeshLambertMaterial({ color: 0x9944dd });
+
+    // Торс: центр (0, 1.75, 0), капсула радиусом 0.5,
+    // scale (0.92, 1.0, 0.68) → поверхность спереди на z ≈ 0.34.
+    // Полоски ставим на z = 0.33 — почти вплотную к торсу.
+    const stripeZ = 0.33;
+    const stripeY = 1.75;
+    const stripeHeight = 0.7;
+
+    // Широкая центральная
+    const stripeCenter = new THREE.Mesh(
+      new THREE.BoxGeometry(0.11, stripeHeight, 0.025),
+      stripeMat
+    );
+    stripeCenter.position.set(0, stripeY, stripeZ);
+    group.add(stripeCenter);
+
+    // Узкая полоска справа
+    const stripeRight = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, stripeHeight, 0.025),
+      stripeMat
+    );
+    stripeRight.position.set(0.20, stripeY, stripeZ);
+    group.add(stripeRight);
+
+    // Узкая полоска слева
+    const stripeLeft = stripeRight.clone();
+    stripeLeft.position.x = -0.20;
+    group.add(stripeLeft);
+  }
 
   // ===== Руки =====
   function makeArm(side) {
@@ -1189,16 +1229,29 @@ function buildKveik(skinId) {
     hairGroup.add(curl);
   }
 
-  // Боковые пряди — маленькие кудри у висков, лицо не закрывают
-  const sideCurlL = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
-  sideCurlL.position.set(-0.44, 0.06, 0.06);
-  sideCurlL.scale.set(0.9, 1.3, 0.9);
-  hairGroup.add(sideCurlL);
+  // Боковые пряди — у базового скина длинные, у «Самовыражения» короче
+  if (!isSelfExpression) {
+    const sideCurlL = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
+    sideCurlL.position.set(-0.44, 0.06, 0.06);
+    sideCurlL.scale.set(0.9, 1.3, 0.9);
+    hairGroup.add(sideCurlL);
 
-  const sideCurlR = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
-  sideCurlR.position.set(0.44, 0.06, 0.06);
-  sideCurlR.scale.set(0.9, 1.3, 0.9);
-  hairGroup.add(sideCurlR);
+    const sideCurlR = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
+    sideCurlR.position.set(0.44, 0.06, 0.06);
+    sideCurlR.scale.set(0.9, 1.3, 0.9);
+    hairGroup.add(sideCurlR);
+  } else {
+    // Короткие волосы — маленькие аккуратные пряди у висков
+    const sideCurlL = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), hairMat);
+    sideCurlL.position.set(-0.42, 0.16, 0.0);
+    sideCurlL.scale.set(0.85, 0.85, 0.95);
+    hairGroup.add(sideCurlL);
+
+    const sideCurlR = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), hairMat);
+    sideCurlR.position.set(0.42, 0.16, 0.0);
+    sideCurlR.scale.set(0.85, 0.85, 0.95);
+    hairGroup.add(sideCurlR);
+  }
 
   group.add(hairGroup);
 
@@ -1233,90 +1286,150 @@ function buildKveik(skinId) {
   // Порядок: 0–1 = рукава L/R, 2–3 = обувь L/R
   const costumeParts = [];
 
-  // Координаты рук в системе координат группы персонажа:
-  // arm.position = (side * 0.75, 2.15, 0),
-  // внутри руки: upper (capsule) на y=-0.3, forearm на y=-0.85, hand на y=-1.2
-  // Значит средняя часть руки находится в мире на y ≈ 2.15 - 0.55 ≈ 1.6.
-  // Рукав должен идти от плеча к запястью — от y=2.0 до y=1.2, центр 1.6.
-
-  // 1. Фиолетовые рукава на левой и правой руке
+  // 1. Элементы на руках: у базового скина — рукава, у «Самовыражения» — перчатки
   const sleeveMat = new THREE.MeshLambertMaterial({
     color: 0x8833cc, emissive: 0x441166,
   });
 
-  // Рукав левый — точно по руке (та же X, тот же наклон)
-  const sleeveL = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
-    sleeveMat
-  );
-  sleeveL.position.set(-0.58, 1.55, 0);
-  sleeveL.rotation.z = -0.12;
-  sleeveL.visible = false;
-  costumeGroup.add(sleeveL);
-  costumeParts.push(sleeveL);
+  let sleeveL, sleeveR;
 
-  // Рукав правый
-  const sleeveR = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
-    sleeveMat
-  );
-  sleeveR.position.set(0.58, 1.55, 0);
-  sleeveR.rotation.z = 0.12;
-  sleeveR.visible = false;
-  costumeGroup.add(sleeveR);
-  costumeParts.push(sleeveR);
+  if (isSelfExpression) {
+    // Короткие фиолетовые перчатки на кистях
+    sleeveL = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 12, 10),
+      sleeveMat
+    );
+    sleeveL.position.set(-0.58, 0.95, 0);
+    sleeveL.scale.set(1, 1.3, 1);
+    sleeveL.visible = false;
+    costumeGroup.add(sleeveL);
+    costumeParts.push(sleeveL);
 
-  // 2. Красивая обувь — глянцевые блестящие сапожки
-  // Координаты ног: leg.position = (side * 0.25, 1.05, 0),
-  // внутри: thigh на y=-0.45 (то есть в мире ~0.6),
-  // shoe на y=-0.95 (в мире ~0.1).
-  // Обувь должна быть на y ≈ 0.1, чуть ниже, чтобы обхватывала ступню.
-  const bootMat = new THREE.MeshLambertMaterial({
-    color: 0x9966ff, emissive: 0x331166,
-  });
+    sleeveR = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 12, 10),
+      sleeveMat
+    );
+    sleeveR.position.set(0.58, 0.95, 0);
+    sleeveR.scale.set(1, 1.3, 1);
+    sleeveR.visible = false;
+    costumeGroup.add(sleeveR);
+    costumeParts.push(sleeveR);
+  } else {
+    // Длинные рукава
+    sleeveL = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
+      sleeveMat
+    );
+    sleeveL.position.set(-0.58, 1.55, 0);
+    sleeveL.rotation.z = -0.12;
+    sleeveL.visible = false;
+    costumeGroup.add(sleeveL);
+    costumeParts.push(sleeveL);
 
-  // Сапог левый — от ступни вверх до голени
-  const bootL = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, 0.55, 0.62),
-    bootMat
-  );
-  bootL.position.set(-0.25, 0.35, 0.08);
-  bootL.visible = false;
-  costumeGroup.add(bootL);
-  costumeParts.push(bootL);
+    sleeveR = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.22, 0.7, 8, 12),
+      sleeveMat
+    );
+    sleeveR.position.set(0.58, 1.55, 0);
+    sleeveR.rotation.z = 0.12;
+    sleeveR.visible = false;
+    costumeGroup.add(sleeveR);
+    costumeParts.push(sleeveR);
+  }
 
-  // Сапог правый
-  const bootR = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, 0.55, 0.62),
-    bootMat
-  );
-  bootR.position.set(0.25, 0.35, 0.08);
-  bootR.visible = false;
-  costumeGroup.add(bootR);
-  costumeParts.push(bootR);
+  // 2. Обувь: базовый скин — голубые сапоги, «Самовыражение» — розовые кеды
+  if (isSelfExpression) {
+    const sneakerMat = new THREE.MeshLambertMaterial({
+      color: 0xff66aa, emissive: 0x662244,
+    });
+    const soleMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
 
-  // Голенища — верхняя часть сапога чуть выше
-  const shinL = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
-    bootMat
-  );
-  shinL.position.set(-0.25, 0.8, 0);
-  shinL.visible = false;
-  costumeGroup.add(shinL);
-  costumeParts.push(shinL);
+    // Розовый кед — левый
+    const bootL = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.32, 0.7),
+      sneakerMat
+    );
+    bootL.position.set(-0.25, 0.28, 0.1);
+    bootL.visible = false;
+    costumeGroup.add(bootL);
+    costumeParts.push(bootL);
 
-  const shinR = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
-    bootMat
-  );
-  shinR.position.set(0.25, 0.8, 0);
-  shinR.visible = false;
-  costumeGroup.add(shinR);
-  costumeParts.push(shinR);
+    // Белая подошва
+    const soleL = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.1, 0.72),
+      soleMat
+    );
+    soleL.position.set(-0.25, 0.1, 0.1);
+    soleL.visible = false;
+    costumeGroup.add(soleL);
+    costumeParts.push(soleL);
+
+    // Розовый кед — правый
+    const bootR = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.32, 0.7),
+      sneakerMat
+    );
+    bootR.position.set(0.25, 0.28, 0.1);
+    bootR.visible = false;
+    costumeGroup.add(bootR);
+    costumeParts.push(bootR);
+
+    const soleR = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.1, 0.72),
+      soleMat
+    );
+    soleR.position.set(0.25, 0.1, 0.1);
+    soleR.visible = false;
+    costumeGroup.add(soleR);
+    costumeParts.push(soleR);
+  } else {
+    // Базовый скин — фиолетовые блестящие сапоги
+    const bootMat = new THREE.MeshLambertMaterial({
+      color: 0x9966ff, emissive: 0x331166,
+    });
+
+    const bootL = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.55, 0.62),
+      bootMat
+    );
+    bootL.position.set(-0.25, 0.35, 0.08);
+    bootL.visible = false;
+    costumeGroup.add(bootL);
+    costumeParts.push(bootL);
+
+    const bootR = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.55, 0.62),
+      bootMat
+    );
+    bootR.position.set(0.25, 0.35, 0.08);
+    bootR.visible = false;
+    costumeGroup.add(bootR);
+    costumeParts.push(bootR);
+
+    const shinL = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
+      bootMat
+    );
+    shinL.position.set(-0.25, 0.8, 0);
+    shinL.visible = false;
+    costumeGroup.add(shinL);
+    costumeParts.push(shinL);
+
+    const shinR = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.24, 0.45, 10),
+      bootMat
+    );
+    shinR.position.set(0.25, 0.8, 0);
+    shinR.visible = false;
+    costumeGroup.add(shinR);
+    costumeParts.push(shinR);
+  }
 
   // 6. Розовые волосы (энчантрикс) — та же форма, другой цвет
+  // У скина «Самовыражение» — фиолетово-розовые с усиленным свечением
   const hairCostumeMat = new THREE.MeshLambertMaterial({
-    color: 0xff88dd, emissive: 0x662266,
+    color: isSelfExpression ? 0xdd66ff : 0xff88dd,
+    emissive: isSelfExpression ? 0x6622aa : 0x662266,
   });
   const hairCostumeGroup = new THREE.Group();
   hairCostumeGroup.visible = false;
@@ -1354,37 +1467,104 @@ function buildKveik(skinId) {
   // ===== Крылья (появляются в конце катсцены) =====
   const wingsGroup = new THREE.Group();
   wingsGroup.visible = false;
-  wingsGroup.position.set(0, 2.0, -0.3);
+  wingsGroup.position.set(0, 1.9, -0.32);   // чуть ниже и плотнее к спине
 
-  const wingMat = new THREE.MeshLambertMaterial({
-    color: 0xaaddff,
-    emissive: 0x4488bb,
-    transparent: true,
-    opacity: 0.85,
-    side: THREE.DoubleSide,
-  });
+  let wingGeo;
+  let wingMat;
+  let wingInnerMat = null;
 
-  // Форма крыла — плоский «лепесток» из Shape
-  const wingShape = new THREE.Shape();
-  wingShape.moveTo(0, 0);
-  wingShape.bezierCurveTo(0.2, 0.4, 0.6, 0.9, 1.5, 1.2);
-  wingShape.bezierCurveTo(1.6, 0.8, 1.4, 0.3, 1.0, -0.1);
-  wingShape.bezierCurveTo(0.8, -0.4, 0.4, -0.3, 0, 0);
-  const wingGeo = new THREE.ShapeGeometry(wingShape, 20);
+  if (isSelfExpression) {
+    // Роскошные крылья — более сложная форма с изгибами и свечением
+    wingMat = new THREE.MeshLambertMaterial({
+      color: 0xff99dd,
+      emissive: 0x8844bb,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+    });
+    wingInnerMat = new THREE.MeshBasicMaterial({
+      color: 0xffeeff,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
 
-  // Правое крыло — растёт вправо-вверх от спины
+    const wingShape = new THREE.Shape();
+    wingShape.moveTo(0, 0);
+    // Верхний «лепесток»
+    wingShape.bezierCurveTo(0.3, 0.6, 0.9, 1.3, 1.9, 1.6);
+    wingShape.bezierCurveTo(2.0, 1.2, 1.8, 0.7, 1.4, 0.4);
+    // Второй ряд «перьев»
+    wingShape.bezierCurveTo(1.7, 0.3, 1.6, 0.0, 1.2, -0.1);
+    // Третий ряд
+    wingShape.bezierCurveTo(1.4, -0.3, 1.1, -0.5, 0.8, -0.4);
+    // Замыкание
+    wingShape.bezierCurveTo(0.5, -0.35, 0.2, -0.2, 0, 0);
+    wingGeo = new THREE.ShapeGeometry(wingShape, 24);
+  } else {
+    // Базовые крылья
+    wingMat = new THREE.MeshLambertMaterial({
+      color: 0xaaddff,
+      emissive: 0x4488bb,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+    });
+
+    const wingShape = new THREE.Shape();
+    wingShape.moveTo(0, 0);
+    wingShape.bezierCurveTo(0.2, 0.4, 0.6, 0.9, 1.5, 1.2);
+    wingShape.bezierCurveTo(1.6, 0.8, 1.4, 0.3, 1.0, -0.1);
+    wingShape.bezierCurveTo(0.8, -0.4, 0.4, -0.3, 0, 0);
+    wingGeo = new THREE.ShapeGeometry(wingShape, 20);
+  }
+
+  // Правое крыло
   const wingR = new THREE.Mesh(wingGeo, wingMat);
-  wingR.position.set(0.1, 0.2, 0);
-  wingR.rotation.z = 0.4;     // наклон вверх
-  wingR.scale.set(1, 1, 1);
+  wingR.position.set(0.08, 0, 0);
+  wingR.rotation.z = 0.35;      // поднимаем вверх
+  wingR.rotation.y = -0.15;     // чуть разворачиваем назад
   wingsGroup.add(wingR);
 
-  // Левое крыло — зеркальная копия через scale.x = -1
+  // Левое крыло — зеркальная копия.
+  // ВАЖНО: при scale.x = -1 поворот rotation.z тоже инвертируется,
+  // поэтому ставим -0.35, чтобы после зеркала крыло поднималось вверх.
   const wingL = new THREE.Mesh(wingGeo, wingMat);
-  wingL.position.set(-0.1, 0.2, 0);
-  wingL.rotation.z = 0.4;
+  wingL.position.set(-0.08, 0, 0);
+  wingL.rotation.z = -0.35;
+  wingL.rotation.y = 0.15;
   wingL.scale.set(-1, 1, 1);
   wingsGroup.add(wingL);
+
+  // Внутреннее свечение для скина «Самовыражение»
+  if (isSelfExpression && wingInnerMat) {
+    const innerR = new THREE.Mesh(wingGeo, wingInnerMat);
+    innerR.position.set(0.08, 0, 0.02);
+    innerR.rotation.z = 0.35;
+    innerR.rotation.y = -0.15;
+    innerR.scale.set(0.6, 0.6, 1);
+    wingsGroup.add(innerR);
+
+    const innerL = new THREE.Mesh(wingGeo, wingInnerMat);
+    innerL.position.set(-0.08, 0, 0.02);
+    innerL.rotation.z = -0.35;
+    innerL.rotation.y = 0.15;
+    innerL.scale.set(-0.6, 0.6, 1);
+    wingsGroup.add(innerL);
+
+    // Светящиеся частицы-искры внутри крыльев
+    for (let i = 0; i < 6; i++) {
+      const sparkMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0.9,
+      });
+      const spark = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), sparkMat);
+      const side = i < 3 ? 1 : -1;
+      const idx = i % 3;
+      spark.position.set(side * (0.6 + idx * 0.3), 0.6 - idx * 0.3, 0.05);
+      wingsGroup.add(spark);
+    }
+  }
 
   group.add(wingsGroup);
 

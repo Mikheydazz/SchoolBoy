@@ -112,6 +112,36 @@ scene.add(sun.target);
 // =====================================================
 const MAP = 200;
 
+// =====================================================
+//  ДИРЕКТОР — объявления (используются раньше, чем блок босса)
+// =====================================================
+const mainWorldTrees = [];
+let inDirectorLair = false;
+let directorLairGroup = null;
+let directorLairExitX = 0;
+let directorLairExitZ = 0;
+let directorTransitioning = false;
+let directorTransitionTimer = 0;
+let directorTransitionPhase = 'none';
+let directorScreamed = false;
+let directorPageTimer = 1.5;
+let directorContactCooldown = 0;
+let playerSlowTimer = 0;
+const directorPages = [];
+
+const directorFadeEl = (function createDirectorFade() {
+  const el = document.createElement('div');
+  el.id = 'directorFade';
+  el.style.cssText = `
+    position: fixed; inset: 0;
+    background: #000; opacity: 0; display: none;
+    z-index: 500; pointer-events: none;
+    transition: opacity 0.05s linear;
+  `;
+  document.body.appendChild(el);
+  return el;
+})();
+
 const groundMat = new THREE.MeshLambertMaterial({ color: 0x5f8a5c });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(MAP, MAP), groundMat);
 ground.rotation.x = -Math.PI / 2;
@@ -137,6 +167,7 @@ for (let i = 0; i < 60; i++) {
   trunk.position.set(x, 0.6, z);
   trunk.castShadow = true;
   scene.add(trunk);
+  mainWorldTrees.push(trunk);
 
   const crown = new THREE.Mesh(
     new THREE.ConeGeometry(1.2, h, 7),
@@ -145,6 +176,7 @@ for (let i = 0; i < 60; i++) {
   crown.position.set(x, 1.2 + h / 2, z);
   crown.castShadow = true;
   scene.add(crown);
+  mainWorldTrees.push(crown);
 }
 
 // =====================================================
@@ -302,6 +334,14 @@ const SKINS_CATALOG = [
     skinId: 'sochi_2014',
     name: 'Сочи 2014',
     desc: 'Красные плавки вместо формы. В Луксмаксинге подъезжает красный кабриолет.',
+    price: 120,
+  },
+  {
+    id: 'kveik_self_expression',
+    charId: 'kveik',
+    skinId: 'self_expression',
+    name: 'Самовыражение',
+    desc: 'Короткие волосы, чёрная футболка с фиолетовой полоской, фиолетовые шорты и белые кеды. В Энчантрикс — фиолетовые перчатки, розовые кеды и роскошные крылья.',
     price: 120,
   },
 ];
@@ -484,7 +524,7 @@ const boss = {
 };
 const bossProjectiles = [];
 let bossTimer = 0;
-let nextBossType = 'biology';   // ← сначала Биология, потом Химия, и так далее
+let nextBossType = 'biology';
 
 // =====================================================
 //  СОБАКИ (спавнит Биология)
@@ -548,7 +588,7 @@ const KVEIK_CUTSCENE_DURATION = 13.0;    // секунд (равно длине 
 const KVEIK_FLYING_DURATION = 10.0;      // секунд полёта
 const KVEIK_COOLDOWN = 30.0;             // секунд после окончания
 const KVEIK_FLYING_SPEED_MULT = 2.4;
-const KVEIK_BOMB_INTERVAL = 3.0;         // сброс бомбы раз в 3 сек
+const KVEIK_BOMB_INTERVAL = 1.5;         // откат бомбы — 1.5 сек
 const KVEIK_BOMB_RADIUS = 5.0;           // радиус взрыва
 const KVEIK_BOMB_DMG_MULT = 7.0;         // ×stats.damage — сильно увеличено
 const KVEIK_END_PUSH_RADIUS = 8.0;
@@ -590,7 +630,7 @@ const PLASTICINE_REGULAR_DMG_MULT = 1.5;
 const PLASTICINE_MUTANT_DMG_MULT = 2.0;
 const PLASTICINE_SPEED = 15.6;             // было 5.2 — ×3
 const PLASTICINE_ATTACK_RANGE = 1.6;
-const PLASTICINE_ATTACK_COOLDOWN = 0.4;    // было 0.8 — ×2
+const PLASTICINE_ATTACK_COOLDOWN = 0.55;   // замедлено — было 0.4
 const PLASTICINE_SPAWN_INVULN = 5.0;   // секунд неуязвимости после спавна
 const PLASTICINE_COLORS = [0xff6b6b, 0x6bff6b, 0x6b6bff, 0xffdd44, 0xff88cc];
 
@@ -598,6 +638,7 @@ let plasticineKillCounter = 0;
 let plasticineBlobs = 0;
 let plasticineManCounter = 0;
 const plasticineMen = [];
+let _killByPlasticine = false;   // true, если текущее убийство совершено человечком
 
 // Визуальный шар щита
 const quicksShieldMesh = new THREE.Mesh(
@@ -733,6 +774,7 @@ const hero = {
   jumpTimer: 0,
   jumpCooldown: 0,
   height: 0,
+  kbX: 0, kbZ: 0,
 };
 // Угол прицела (мышь / джойстик / тап).
 // Используется для направленного оружия: линейка, дробовик.
@@ -868,7 +910,7 @@ const WEAPONS = [
     desc: 'Каждые 5 убийств — сгусток. 2 сгустка = пластилиновый человечек, который сам идёт атаковать врагов. С 3 ур. каждый третий человечек — мутант.',
     color: 0xff6b6b,
     maxLevel: 5,
-    maxMen: [4, 6, 6, 8, 10],
+    maxMen: [3, 4, 5, 6, 7],
   },
 ];
 
@@ -2281,7 +2323,12 @@ function updatePlasticineMen(dt) {
           nearest.hp -= m.damage;
           if (nearest.hp <= 0) {
             const idx = enemies.indexOf(nearest);
-            if (idx >= 0) killEnemy(nearest, idx);
+            if (idx >= 0) {
+              // Флаг для killEnemy, чтобы не начислялся сгусток
+              _killByPlasticine = true;
+              killEnemy(nearest, idx);
+              _killByPlasticine = false;
+            }
           }
         }
         burst(tx, tz, m.color);
@@ -2340,21 +2387,16 @@ function trySpawnPlasticineMan() {
   const alive = plasticineMen.filter(m => !m.dying).length;
   if (alive >= maxMen) return;
 
-  // Нужно 2 сгустка, чтобы призвать партию из 2 человечков
+  // Нужно 2 сгустка
   if (plasticineBlobs < PLASTICINE_BLOBS_PER_MAN) return;
 
-  // Спавним двоих за раз, если есть место в лимите
-  const roomForTwo = maxMen - alive >= 2;
-  const spawnCount = roomForTwo ? 2 : 1;
-
+  // Спавним одного человечка за 2 сгустка
   plasticineBlobs -= PLASTICINE_BLOBS_PER_MAN;
   updatePlasticineHud();
 
-  for (let k = 0; k < spawnCount; k++) {
-    plasticineManCounter++;
-    const isMutant = (lvl >= 3) && (plasticineManCounter % PLASTICINE_MUTANT_EVERY === 0);
-    spawnPlasticineMan(isMutant);
-  }
+  plasticineManCounter++;
+  const isMutant = (lvl >= 3) && (plasticineManCounter % PLASTICINE_MUTANT_EVERY === 0);
+  spawnPlasticineMan(isMutant);
 }
 
 // =====================================================
@@ -3560,7 +3602,7 @@ function updateKveikEnchantix(dt) {
     if (t >= KVEIK_CUTSCENE_DURATION) {
       kveikPhase = 'flying';
       kveikTimer = 0;
-      kveikBombTimer = KVEIK_BOMB_INTERVAL - 0.5;
+      kveikBombTimer = 0;   // бомба доступна сразу
       enemiesFrozen = false;
 
       // Убираем магическое пространство
@@ -3629,28 +3671,11 @@ function updateKveikEnchantix(dt) {
       }
     }
 
-    // Бомбы раз в KVEIK_BOMB_INTERVAL секунд
-    kveikBombTimer += dt;
-    if (kveikBombTimer >= KVEIK_BOMB_INTERVAL) {
-      kveikBombTimer = 0;
-      // Сбрасываем бомбу в позицию ближайшего скопления врагов
-      let targetX = hero.x, targetZ = hero.z;
-      let bestCount = 0;
-      for (const e of enemies) {
-        if (e.dying) continue;
-        let cnt = 0;
-        for (const e2 of enemies) {
-          if (e2.dying) continue;
-          if (Math.hypot(e2.x - e.x, e2.z - e.z) < KVEIK_BOMB_RADIUS) cnt++;
-        }
-        if (cnt > bestCount) {
-          bestCount = cnt;
-          targetX = e.x;
-          targetZ = e.z;
-        }
-      }
-      // Если врагов нет — просто под героя
-      spawnKveikBomb(hero.x, hero.z, targetX, targetZ);
+    // Бомбы бросает игрок вручную (ЛКМ или кнопка атаки).
+    // Здесь только тикает кулдаун бомб.
+    if (kveikBombTimer > 0) {
+      kveikBombTimer -= dt;
+      if (kveikBombTimer < 0) kveikBombTimer = 0;
     }
 
     // Конец полёта
@@ -3945,7 +3970,9 @@ function killEnemy(e, idx) {
                   e.type.color);
 
   // ===== Пластилин — счётчик сгустков =====
-  if (equippedWeapons.plasticine) {
+  // Сгустки копятся ТОЛЬКО когда врага убил сам игрок,
+  // а не пластилиновый человечек.
+  if (equippedWeapons.plasticine && !_killByPlasticine) {
     plasticineKillCounter++;
     if (plasticineKillCounter >= PLASTICINE_KILLS_PER_BLOB) {
       plasticineKillCounter -= PLASTICINE_KILLS_PER_BLOB;
@@ -3954,6 +3981,7 @@ function killEnemy(e, idx) {
       trySpawnPlasticineMan();
     }
   }
+  _killByPlasticine = false;
 }
 
 function spawnPenEffect(x, z, angle, len) {
@@ -4400,6 +4428,662 @@ function makeBossAura() {
 }
 
 // =====================================================
+//  МОДЕЛЬ ДИРЕКТОРА
+// =====================================================
+function makeDirectorMesh() {
+  const group = new THREE.Group();
+
+  const suitMat   = new THREE.MeshLambertMaterial({ color: 0x1a1a2a });
+  const suitDark  = new THREE.MeshLambertMaterial({ color: 0x0e0e1a });
+  const shirtMat  = new THREE.MeshLambertMaterial({ color: 0xf0f0f0 });
+  const tieMat    = new THREE.MeshLambertMaterial({ color: 0x8a1010 });
+  const skinMat   = new THREE.MeshLambertMaterial({ color: 0xe0b088 });
+  const hairMat   = new THREE.MeshLambertMaterial({ color: 0xb0b0b0 });
+  const shoeMat   = new THREE.MeshLambertMaterial({ color: 0x0a0a0a });
+  const bookMat   = new THREE.MeshLambertMaterial({ color: 0x8a1a1a });
+  const pageMat   = new THREE.MeshLambertMaterial({ color: 0xf5efd8 });
+  const bookSpine = new THREE.MeshLambertMaterial({ color: 0x4a0808 });
+  const eyeMat    = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupilMat  = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const glassMat  = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const browMat   = new THREE.MeshBasicMaterial({ color: 0x3a2a1a });
+
+  // ===== Ноги =====
+  const legL = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 1.0, 6, 12), suitDark);
+  legL.position.set(-0.38, 1.0, 0);
+  legL.castShadow = true;
+  group.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.38;
+  group.add(legR);
+
+  // Ботинки
+  const shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.85), shoeMat);
+  shoeL.position.set(-0.38, 0.14, 0.15);
+  shoeL.castShadow = true;
+  group.add(shoeL);
+  const shoeR = shoeL.clone();
+  shoeR.position.x = 0.38;
+  group.add(shoeR);
+
+  // ===== Торс (пиджак) =====
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.75, 1.3, 8, 16), suitMat);
+  torso.position.y = 2.4;
+  torso.scale.set(1.05, 1.0, 0.85);
+  torso.castShadow = true;
+  group.add(torso);
+
+  // Белая рубашка на груди
+  const shirt = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.3, 0.15), shirtMat);
+  shirt.position.set(0, 2.4, 0.66);
+  group.add(shirt);
+
+  // Галстук
+  const tie = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.0, 0.08), tieMat);
+  tie.position.set(0, 2.3, 0.76);
+  group.add(tie);
+  const tieKnot = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.1), tieMat);
+  tieKnot.position.set(0, 2.82, 0.76);
+  group.add(tieKnot);
+
+  // Лацканы пиджака
+  const lapelL = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.1, 0.1), suitDark);
+  lapelL.position.set(-0.4, 2.5, 0.72);
+  lapelL.rotation.z = 0.12;
+  group.add(lapelL);
+  const lapelR = lapelL.clone();
+  lapelR.position.x = 0.4;
+  lapelR.rotation.z = -0.12;
+  group.add(lapelR);
+
+  // Ремень
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.18, 0.85), shoeMat);
+  belt.position.y = 1.5;
+  group.add(belt);
+
+  // ===== Шея =====
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.28, 10), skinMat);
+  neck.position.y = 3.35;
+  group.add(neck);
+
+  // ===== Голова =====
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 16), skinMat);
+  head.position.y = 3.9;
+  head.scale.set(1.0, 1.1, 1.0);
+  head.castShadow = true;
+  group.add(head);
+
+  // ===== Седые волосы =====
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.58, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    hairMat
+  );
+  hair.position.y = 4.0;
+  hair.scale.set(1.02, 1.0, 1.02);
+  group.add(hair);
+
+  // Волосы по бокам (виски)
+  const sideL = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), hairMat);
+  sideL.position.set(-0.5, 3.85, 0);
+  sideL.scale.set(0.7, 1.0, 0.8);
+  group.add(sideL);
+  const sideR = sideL.clone();
+  sideR.position.x = 0.5;
+  group.add(sideR);
+
+  // ===== Глаза =====
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), eyeMat);
+  eyeL.position.set(-0.2, 3.95, 0.48);
+  group.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.2;
+  group.add(eyeR);
+
+  const pupilL = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), pupilMat);
+  pupilL.position.set(-0.2, 3.95, 0.56);
+  group.add(pupilL);
+  const pupilR = pupilL.clone();
+  pupilR.position.x = 0.2;
+  group.add(pupilR);
+
+  // ===== Очки =====
+  const glassLensL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.05), glassMat);
+  glassLensL.position.set(-0.2, 3.95, 0.58);
+  group.add(glassLensL);
+  const glassLensR = glassLensL.clone();
+  glassLensR.position.x = 0.2;
+  group.add(glassLensR);
+  const glassBridge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.05), glassMat);
+  glassBridge.position.set(0, 3.95, 0.6);
+  group.add(glassBridge);
+  const glassArmL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.4), glassMat);
+  glassArmL.position.set(-0.42, 3.95, 0.4);
+  group.add(glassArmL);
+  const glassArmR = glassArmL.clone();
+  glassArmR.position.x = 0.42;
+  group.add(glassArmR);
+
+  // ===== Брови (грозные) =====
+  const browL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.06, 0.04), browMat);
+  browL.position.set(-0.2, 4.16, 0.5);
+  browL.rotation.z = 0.22;
+  group.add(browL);
+  const browR = browL.clone();
+  browR.position.x = 0.2;
+  browR.rotation.z = -0.22;
+  group.add(browR);
+
+  // ===== Рот (недовольный) =====
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(0.16, 0.03, 6, 14, Math.PI),
+    pupilMat
+  );
+  mouth.position.set(0, 3.65, 0.5);
+  mouth.rotation.z = Math.PI;
+  group.add(mouth);
+
+  // ===== Руки =====
+  // Левая рука опущена
+  const armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 1.0, 6, 12), suitMat);
+  armL.position.set(-1.0, 2.6, 0);
+  armL.rotation.z = 0.22;
+  armL.castShadow = true;
+  group.add(armL);
+
+  const handL = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), skinMat);
+  handL.position.set(-1.2, 1.95, 0);
+  handL.castShadow = true;
+  group.add(handL);
+
+  // Правая рука держит книгу
+  const armR = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 1.0, 6, 12), suitMat);
+  armR.position.set(1.0, 2.6, 0);
+  armR.rotation.z = -0.22;
+  armR.castShadow = true;
+  group.add(armR);
+
+  const handR = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), skinMat);
+  handR.position.set(1.2, 1.95, 0);
+  handR.castShadow = true;
+  group.add(handR);
+
+  // ===== Книга =====
+  const bookGroup = new THREE.Group();
+
+  // Обложка
+  const cover = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.6, 0.35), bookMat);
+  cover.castShadow = true;
+  bookGroup.add(cover);
+
+  // Страницы (жёлтый блок внутри)
+  const pages = new THREE.Mesh(new THREE.BoxGeometry(1.85, 2.4, 0.26), pageMat);
+  pages.position.z = 0.06;
+  bookGroup.add(pages);
+
+  // Корешок
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.6, 0.38), bookSpine);
+  spine.position.x = -0.95;
+  bookGroup.add(spine);
+
+  // Застёжка / уголки
+  const cornerMat = new THREE.MeshLambertMaterial({ color: 0xd9a02a });
+  for (const sx of [-0.85, 0.85]) {
+    for (const sy of [-1.1, 1.1]) {
+      const corner = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.38), cornerMat);
+      corner.position.set(sx, sy, 0);
+      bookGroup.add(corner);
+    }
+  }
+
+  bookGroup.position.set(1.25, 2.4, 0.2);
+  bookGroup.rotation.z = -0.15;
+  group.add(bookGroup);
+  group.userData.book = bookGroup;
+
+  return group;
+}
+
+// =====================================================
+//  ЛОГОВО ДИРЕКТОРА
+// =====================================================
+function createDirectorLair() {
+  const g = new THREE.Group();
+  g.visible = false;
+  scene.add(g);
+
+  const W = 80;
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(W, W),
+    new THREE.MeshLambertMaterial({ color: 0x5a3a1a })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  g.add(floor);
+
+  // Полосы паркета
+  for (let i = -W/2; i < W/2; i += 5) {
+    const line = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.15, W),
+      new THREE.MeshBasicMaterial({ color: 0x3a2010 })
+    );
+    line.rotation.x = -Math.PI / 2;
+    line.position.set(i, 0.01, 0);
+    g.add(line);
+  }
+
+  // Полупрозрачные стены — не мешают обзору, но создают атмосферу кабинета
+  const wallMat = new THREE.MeshLambertMaterial({
+    color: 0x2a1a3a,
+    transparent: true,
+    opacity: 0.28,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const wallH = 15;
+
+  const wallN = new THREE.Mesh(new THREE.BoxGeometry(W, wallH, 0.6), wallMat);
+  wallN.position.set(0, wallH/2, -W/2); g.add(wallN);
+  const wallS = wallN.clone(); wallS.position.z = W/2; g.add(wallS);
+  const wallE = new THREE.Mesh(new THREE.BoxGeometry(0.6, wallH, W), wallMat);
+  wallE.position.set(W/2, wallH/2, 0); g.add(wallE);
+  const wallW = wallE.clone(); wallW.position.x = -W/2; g.add(wallW);
+
+  // Портреты на стенах
+  for (let i = 0; i < 4; i++) {
+    const portrait = new THREE.Mesh(
+      new THREE.BoxGeometry(3, 4, 0.2),
+      new THREE.MeshLambertMaterial({ color: 0x8a6a3a })
+    );
+    portrait.position.set(-W/2 + 0.6, 8, -20 + i * 13);
+    portrait.rotation.y = Math.PI / 2;
+    g.add(portrait);
+  }
+  for (let i = 0; i < 4; i++) {
+    const portrait = new THREE.Mesh(
+      new THREE.BoxGeometry(3, 4, 0.2),
+      new THREE.MeshLambertMaterial({ color: 0x8a6a3a })
+    );
+    portrait.position.set(W/2 - 0.6, 8, -20 + i * 13);
+    portrait.rotation.y = -Math.PI / 2;
+    g.add(portrait);
+  }
+
+  // Стол директора
+  const desk = new THREE.Mesh(
+    new THREE.BoxGeometry(6, 2, 3),
+    new THREE.MeshLambertMaterial({ color: 0x3a1e0a })
+  );
+  desk.position.set(0, 1, -22);
+  g.add(desk);
+
+  // Шкаф
+  const shelf = new THREE.Mesh(
+    new THREE.BoxGeometry(8, 9, 1.5),
+    new THREE.MeshLambertMaterial({ color: 0x3a1e0a })
+  );
+  shelf.position.set(0, 4.5, -W/2 + 1);
+  g.add(shelf);
+
+  // Свет
+  const lamp = new THREE.PointLight(0xffee88, 2.5, 80);
+  lamp.position.set(0, 12, 0);
+  g.add(lamp);
+
+  const lampMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.9, 12, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffee88 })
+  );
+  lampMesh.position.set(0, 12, 0);
+  g.add(lampMesh);
+
+  return g;
+}
+
+// =====================================================
+//  КОЛЛИЗИИ ЛОГОВА ДИРЕКТОРА
+// =====================================================
+const DIRECTOR_LAIR_SIZE = 80;
+const DIRECTOR_LAIR_BOUND = DIRECTOR_LAIR_SIZE / 2 - 1.2;   // отступ от стены
+
+function isInsideDirectorWall(px, pz, r) {
+  if (!inDirectorLair) return false;
+  // Простая прямоугольная граница
+  if (px - r < -DIRECTOR_LAIR_BOUND) return true;
+  if (px + r > DIRECTOR_LAIR_BOUND) return true;
+  if (pz - r < -DIRECTOR_LAIR_BOUND) return true;
+  if (pz + r > DIRECTOR_LAIR_BOUND) return true;
+  return false;
+}
+
+function clampToDirectorLair(px, pz, r) {
+  return {
+    x: Math.max(-DIRECTOR_LAIR_BOUND + r, Math.min(DIRECTOR_LAIR_BOUND - r, px)),
+    z: Math.max(-DIRECTOR_LAIR_BOUND + r, Math.min(DIRECTOR_LAIR_BOUND - r, pz)),
+  };
+}
+
+// =====================================================
+//  ПЕРЕКЛЮЧЕНИЕ ЛОКАЦИЙ
+// =====================================================
+function enterDirectorLair() {
+  inDirectorLair = true;
+  directorLairExitX = hero.x;
+  directorLairExitZ = hero.z;
+
+  // ===== Полная очистка поля от всех врагов и объектов =====
+  for (const e of enemies) {
+    scene.remove(e.mesh);
+    removeDebugHitbox(e);
+  }
+  enemies.length = 0;
+
+  for (const p of projectiles) scene.remove(p);
+  projectiles.length = 0;
+
+  for (const b of rulerProjectiles) {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  rulerProjectiles.length = 0;
+
+  for (const b of physrukBalls) {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  physrukBalls.length = 0;
+
+  for (const p of bossProjectiles) scene.remove(p);
+  bossProjectiles.length = 0;
+
+  for (const m of quicksMissiles) {
+    scene.remove(m.mesh);
+    m.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  quicksMissiles.length = 0;
+
+  for (const b of kveikBombs) {
+    scene.remove(b.mesh);
+    b.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  kveikBombs.length = 0;
+
+  for (const z of quicksFrostZones) {
+    scene.remove(z.mesh);
+    z.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  quicksFrostZones.length = 0;
+
+  for (const eff of compassEffects) {
+    const clean = (obj) => {
+      if (!obj) return;
+      scene.remove(obj);
+      obj.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+          else o.material.dispose();
+        }
+      });
+    };
+    clean(eff.needleLineGroup);
+    clean(eff.bigCompass);
+    clean(eff.circleMesh);
+    clean(eff.discMesh);
+    clean(eff.centerMarker);
+  }
+  compassEffects.length = 0;
+
+  for (const m of plasticineMen) {
+    scene.remove(m.mesh);
+    m.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        if (Array.isArray(o.material)) o.material.forEach(mat => mat.dispose());
+        else o.material.dispose();
+      }
+    });
+  }
+  plasticineMen.length = 0;
+
+  for (const s of statues) {
+    scene.remove(s.mesh);
+    scene.remove(s.hpBar);
+    if (s.debugHitbox) {
+      scene.remove(s.debugHitbox);
+      s.debugHitbox.geometry.dispose();
+      s.debugHitbox.material.dispose();
+    }
+  }
+  statues.length = 0;
+
+  for (const z of zones) scene.remove(z.group);
+  zones.length = 0;
+
+  for (const orb of xpOrbs) scene.remove(orb.mesh);
+  xpOrbs.length = 0;
+
+  // Прячем основной мир
+  ground.visible = false;
+  grid.visible = false;
+  for (const t of mainWorldTrees) t.visible = false;
+  for (const h of houses) h.group.visible = false;
+
+  if (!directorLairGroup) directorLairGroup = createDirectorLair();
+  directorLairGroup.visible = true;
+
+  // Ставим героя ближе к центру кабинета, подальше от стен
+  hero.x = 0;
+  hero.z = 25;
+  hero.kbX = 0;
+  hero.kbZ = 0;
+  heroGroup.position.set(hero.x, hero.height, hero.z);
+
+  // Директор за своим столом
+  boss.x = 0;
+  boss.z = -15;
+  if (boss.mesh) boss.mesh.position.set(0, 2.6, -15);
+
+  directorScreamed = false;
+  directorPageTimer = 1.5;
+  directorContactCooldown = 1.0;
+}
+
+function exitDirectorLair() {
+  inDirectorLair = false;
+  ground.visible = true;
+  grid.visible = true;
+  for (const t of mainWorldTrees) t.visible = true;
+  for (const h of houses) h.group.visible = true;
+  if (directorLairGroup) directorLairGroup.visible = false;
+
+  hero.x = directorLairExitX;
+  hero.z = directorLairExitZ;
+  heroGroup.position.set(hero.x, hero.height, hero.z);
+
+  // Убираем страницы
+  for (const p of directorPages) {
+    scene.remove(p.mesh);
+    p.mesh.geometry.dispose();
+    p.mesh.material.dispose();
+  }
+  directorPages.length = 0;
+}
+
+function startDirectorTransition() {
+  directorTransitioning = true;
+  directorTransitionTimer = 0;
+  directorTransitionPhase = 'raise';
+  enemiesFrozen = true;
+}
+
+function updateDirectorTransition(dt) {
+  if (!directorTransitioning) return;
+  directorTransitionTimer += dt;
+  const t = directorTransitionTimer;
+
+  if (directorTransitionPhase === 'raise' && t < 0.7) {
+    const p = t / 0.7;
+    if (boss.mesh && boss.mesh.userData.book) {
+      boss.mesh.userData.book.rotation.z = -0.2 - p * 1.2;
+      boss.mesh.userData.book.position.y = 2.3 + p * 1.5;
+    }
+  } else if (directorTransitionPhase === 'raise') {
+    directorTransitionPhase = 'slam';
+    directorTransitionTimer = 0;
+  } else if (directorTransitionPhase === 'slam') {
+    const p = Math.min(1, t / 0.35);
+    if (boss.mesh && boss.mesh.userData.book) {
+      boss.mesh.userData.book.rotation.z = -1.4 + p * 3.0;
+      boss.mesh.userData.book.position.y = 3.8 - p * 3.5;
+    }
+    if (t >= 0.35) {
+      directorTransitionPhase = 'fade';
+      directorTransitionTimer = 0;
+      directorFadeEl.style.display = 'block';
+      directorFadeEl.style.opacity = '0';
+      cameraShake(0.6);
+    }
+  } else if (directorTransitionPhase === 'fade') {
+    const p = Math.min(1, t / 0.6);
+    directorFadeEl.style.opacity = String(p);
+    if (t >= 0.6) {
+      enterDirectorLair();
+      directorTransitionPhase = 'fadeOut';
+      directorTransitionTimer = 0;
+    }
+  } else if (directorTransitionPhase === 'fadeOut') {
+    const p = Math.min(1, t / 0.6);
+    directorFadeEl.style.opacity = String(1 - p);
+    if (t >= 0.6) {
+      directorFadeEl.style.display = 'none';
+      directorTransitioning = false;
+      directorTransitionPhase = 'none';
+      enemiesFrozen = false;
+      if (boss.mesh && boss.mesh.userData.book) {
+        boss.mesh.userData.book.rotation.z = -0.2;
+        boss.mesh.userData.book.position.y = 2.3;
+      }
+    }
+  }
+}
+
+// =====================================================
+//  АТАКИ ДИРЕКТОРА В ЛОГОВЕ
+// =====================================================
+function updateDirectorLairBoss(dt) {
+  const dx = hero.x - boss.x;
+  const dz = hero.z - boss.z;
+  const d = Math.hypot(dx, dz) || 1;
+
+  boss.mesh.lookAt(hero.x, 2.6, boss.z);
+  const bob = Math.sin(performance.now() * 0.003) * 0.2;
+  boss.mesh.position.set(boss.x, 2.6 + bob, boss.z);
+
+  // Стрельба страницами
+  directorPageTimer -= dt;
+  if (directorPageTimer <= 0) {
+    directorPageTimer = 1.5;
+    const baseAngle = Math.atan2(dz, dx);
+    for (let i = -1; i <= 1; i++) {
+      spawnDirectorPage(boss.x, boss.z, baseAngle + i * 0.35);
+    }
+  }
+
+  // Контактный удар — без отброса игрока, только урон
+  directorContactCooldown -= dt;
+  if (d < 4 && directorContactCooldown <= 0) {
+    directorContactCooldown = 1.5;
+    damageHero(boss.contactDamage * 0.5);
+    burst(hero.x, hero.z, 0xffaa55);
+  }
+
+  // Крик при < 20% HP — один раз, с отбросом
+  if (!directorScreamed && boss.hp / boss.maxHp < 0.2) {
+    directorScreamed = true;
+    const angle = Math.atan2(hero.z - boss.z, hero.x - boss.x);
+    // Плавный отброс через скорость отбрасывания — игрок сам не «телепортируется»
+    hero.kbX = Math.cos(angle) * 60;
+    hero.kbZ = Math.sin(angle) * 60;
+    damageHero(boss.contactDamage * 0.7);
+    burst(boss.x, boss.z, 0xffffff);
+    burst(boss.x, boss.z, 0xffee88);
+    cameraShake(0.5);
+  }
+}
+
+function spawnDirectorPage(fromX, fromZ, angle) {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.02, 0.8),
+    new THREE.MeshLambertMaterial({ color: 0xf5f0d0 })
+  );
+  mesh.position.set(fromX, 2.5, fromZ);
+  mesh.rotation.y = -angle;
+  mesh.castShadow = true;
+  scene.add(mesh);
+
+  directorPages.push({
+    mesh,
+    x: fromX,
+    z: fromZ,
+    vx: Math.cos(angle) * 9,
+    vz: Math.sin(angle) * 9,
+    damage: boss.contactDamage * 0.15,
+    life: 3.0,
+    spin: 0,
+  });
+}
+
+function updateDirectorPages(dt) {
+  for (let i = directorPages.length - 1; i >= 0; i--) {
+    const p = directorPages[i];
+    p.life -= dt;
+    p.x += p.vx * dt;
+    p.z += p.vz * dt;
+    p.spin += dt * 10;
+
+    p.mesh.position.set(p.x, 2.5 + Math.sin(p.spin) * 0.1, p.z);
+    p.mesh.rotation.x += dt * 5;
+
+    const dx = hero.x - p.x;
+    const dz = hero.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1.0 && hero.height < JUMP_SAFE_HEIGHT) {
+      damageHero(p.damage);
+      playerSlowTimer = 2.0;   // замедление на 2 сек
+      burst(p.x, p.z, 0xffffee);
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      directorPages.splice(i, 1);
+      continue;
+    }
+
+    if (p.life <= 0) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      directorPages.splice(i, 1);
+    }
+  }
+}
+
+// =====================================================
 //  БОСС — ЛОГИКА
 // =====================================================
 function spawnBoss() {
@@ -4421,6 +5105,12 @@ function spawnBoss() {
     maxHp = 4500 + level * 220;
     speed = 2.5;
     contactDamage = 70 + level * 2.5;
+  } else if (type === 'director') {
+    mesh = makeDirectorMesh();
+    title = '👔 БОСС: ДИРЕКТОР 👔';
+    maxHp = 6000 + level * 300;
+    speed = 0;
+    contactDamage = 100 + level * 4;
   } else {
     mesh = makeBossMesh(makeBossCoverTexture(), 0x6b1a8a, 0x4a0a6a, 0xff3030);
     title = '💀 БОСС: ХИМИЯ 💀';
@@ -4499,8 +5189,15 @@ function killBoss() {
   bossProjectiles.forEach(p => scene.remove(p));
   bossProjectiles.length = 0;
 
-    // Следующий босс — противоположный
-  nextBossType = (nextBossType === 'biology') ? 'chemistry' : 'biology';
+  // Следующий босс по кругу: биология → химия → директор → биология
+  if (nextBossType === 'biology') nextBossType = 'chemistry';
+  else if (nextBossType === 'chemistry') nextBossType = 'director';
+  else nextBossType = 'biology';
+
+  // Если бой шёл в логове — вернуть игрока в основной мир
+  if (boss.type === 'director' && inDirectorLair) {
+    exitDirectorLair();
+  }
 
   // Все собаки исчезают
   for (let i = enemies.length - 1; i >= 0; i--) {
@@ -4535,6 +5232,35 @@ function updateBossHud() {
 
 function updateBoss(dt) {
   if (!boss.active) return;
+
+  // Директор — своя логика
+  if (boss.type === 'director') {
+    // В основной локации — просто ждём подхода игрока
+    if (!inDirectorLair) {
+      if (!directorTransitioning && gameActive && !paused) {
+        const dx = hero.x - boss.x;
+        const dz = hero.z - boss.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 8) startDirectorTransition();
+      }
+      // Не даём таймеру босса идти
+      return;
+    }
+    // В логове — полноценный бой
+    if (enemiesFrozen) return;
+    boss.timeLeft -= dt;
+    updateBossHud();
+    if (boss.timeLeft <= 0) {
+      hp = 0;
+      gameActive = false;
+      updateHud();
+      document.getElementById('bossHud').classList.remove('active');
+      showGameOver('Директор перевёл вас на второй год...');
+      return;
+    }
+    updateDirectorLairBoss(dt);
+    return;
+  }
 
   // Заморозка во время катсцены Луксмаксинга
   if (enemiesFrozen) return;
@@ -6206,6 +6932,20 @@ let lastJumpAttack = 0;
 
 function doAttack() {
   if (lucksMaxingActive) return;
+
+  // ============================================================
+  //  КВЕЙК В ПОЛЁТЕ ЭНЧАНТРИКС — ручной сброс бомбы по ЛКМ
+  // ============================================================
+  if (currentCharacter && currentCharacter.isKveik &&
+      kveikEnchantixActive && kveikPhase === 'flying') {
+    if (kveikBombTimer > 0) return;   // кулдаун бомбы
+    kveikBombTimer = KVEIK_BOMB_INTERVAL;   // 3 секунды
+    // Бомба падает прямо под героя
+    spawnKveikBomb(hero.x, hero.z, hero.x, hero.z);
+    return;
+  }
+
+  // Во время катсцены — никаких атак
   if (kveikEnchantixActive) return;
 
   const now = performance.now();
@@ -9376,26 +10116,44 @@ function loop(now) {
       if (lucksMaxingActive && lucksMaxingPhase === 'driving') {
         speedMul *= LUCK_CAR_SPEED_MULT;
       }
-      // Квейк в полёте — быстрее
       if (kveikEnchantixActive && kveikPhase === 'flying') {
         speedMul *= KVEIK_FLYING_SPEED_MULT;
       }
+      // Замедление от страниц директора
+      if (playerSlowTimer > 0) speedMul *= 0.45;
       const curSpeed = stats.speed * speedMul;
       const nx = hero.x + (mx / l) * curSpeed * dt;
       const nz = hero.z + (mz / l) * curSpeed * dt;
 
       const heroCollideRadius = 0.9 * stats.bodyRadius;
-      let tryX = resolveHouseCollision(nx, hero.z, heroCollideRadius);
-      let tryZ = resolveHouseCollision(hero.x, nz, heroCollideRadius);
-      let tryBoth = resolveHouseCollision(nx, nz, heroCollideRadius);
 
-      if (!isInsideHouse(tryBoth.x, tryBoth.z, 0)) {
-        hero.x = tryBoth.x;
-        hero.z = tryBoth.z;
-      } else if (!isInsideHouse(tryX.x, tryX.z, 0)) {
-        hero.x = tryX.x;
-      } else if (!isInsideHouse(tryZ.x, tryZ.z, 0)) {
-        hero.z = tryZ.z;
+      if (inDirectorLair) {
+        // ===== В логове — только границы стен =====
+        // Пробуем сдвинуть по каждой оси отдельно для скольжения вдоль стен.
+        if (!isInsideDirectorWall(nx, hero.z, heroCollideRadius)) {
+          hero.x = nx;
+        }
+        if (!isInsideDirectorWall(hero.x, nz, heroCollideRadius)) {
+          hero.z = nz;
+        }
+        // На всякий случай подстрахуемся клампом
+        const c = clampToDirectorLair(hero.x, hero.z, heroCollideRadius);
+        hero.x = c.x;
+        hero.z = c.z;
+      } else {
+        // ===== В основном мире — дома =====
+        let tryX = resolveHouseCollision(nx, hero.z, heroCollideRadius);
+        let tryZ = resolveHouseCollision(hero.x, nz, heroCollideRadius);
+        let tryBoth = resolveHouseCollision(nx, nz, heroCollideRadius);
+
+        if (!isInsideHouse(tryBoth.x, tryBoth.z, 0)) {
+          hero.x = tryBoth.x;
+          hero.z = tryBoth.z;
+        } else if (!isInsideHouse(tryX.x, tryX.z, 0)) {
+          hero.x = tryX.x;
+        } else if (!isInsideHouse(tryZ.x, tryZ.z, 0)) {
+          hero.z = tryZ.z;
+        }
       }
 
       hero.walkPhase += dt * 10;
@@ -9409,8 +10167,21 @@ function loop(now) {
       hero.walkPhase *= 0.9;
     }
 
-    hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
-    hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
+    // Отброс героя (от крика директора и других источников)
+    if (hero.kbX || hero.kbZ) {
+      hero.x += hero.kbX * dt;
+      hero.z += hero.kbZ * dt;
+      hero.kbX *= 0.88;
+      hero.kbZ *= 0.88;
+      if (Math.abs(hero.kbX) < 0.1) hero.kbX = 0;
+      if (Math.abs(hero.kbZ) < 0.1) hero.kbZ = 0;
+    }
+
+    // Кламп применяем только вне логова — внутри работает своя граница
+    if (!inDirectorLair) {
+      hero.x = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.x));
+      hero.z = Math.max(-MAP / 2 + 2, Math.min(MAP / 2 - 2, hero.z));
+    }
     heroGroup.position.set(hero.x, hero.height, hero.z);
     // Масштаб героя от карточки «Крупная фигура»
     if (!lucksMaxingActive) {
@@ -9470,6 +10241,13 @@ function loop(now) {
     updateCompassEffects(dt);
     updatePlasticineMen(dt);
     updatePlasticineHud();
+    updateDirectorTransition(dt);
+    updateDirectorPages(dt);
+    // Замедление игрока страницами директора
+    if (playerSlowTimer > 0) {
+      playerSlowTimer -= dt;
+      if (playerSlowTimer < 0) playerSlowTimer = 0;
+    }
     updateHammerBuffBar();
     syncDebugHitboxes();
     useWeapons(dt);
@@ -9763,7 +10541,7 @@ function loop(now) {
     }
 
     // Спавн врагов (реже во время боя с боссом, не спавним во время катсцены)
-    if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene')) {
+    if (!(lucksMaxingActive && lucksMaxingPhase === 'cutscene') && !inDirectorLair) {
     spawnTimer += dt;
     const spawnMultiplier = boss.active ? 2.2 : 1;
     let interval = Math.max(0.3, (1.1 - level * 0.04)) * spawnMultiplier;
@@ -9862,6 +10640,8 @@ function reset() {
   hero.jumpTimer = 0;
   hero.jumpCooldown = 0;
   hero.height = 0;
+  hero.kbX = 0;
+  hero.kbZ = 0;
 
   heroGroup.position.set(0, 0, -20);
   heroGroup.rotation.y = 0;
@@ -9955,6 +10735,32 @@ function reset() {
     });
   }
   kveikBombs.length = 0;
+
+  // Сброс Директора
+  inDirectorLair = false;
+  directorTransitioning = false;
+  directorTransitionPhase = 'none';
+  directorTransitionTimer = 0;
+  directorScreamed = false;
+  directorPageTimer = 1.5;
+  directorContactCooldown = 0;
+  playerSlowTimer = 0;
+  directorFadeEl.style.display = 'none';
+  directorFadeEl.style.opacity = '0';
+
+  for (const p of directorPages) {
+    scene.remove(p.mesh);
+    p.mesh.geometry.dispose();
+    p.mesh.material.dispose();
+  }
+  directorPages.length = 0;
+
+  // Возвращаем основной мир
+  if (ground) ground.visible = true;
+  if (grid) grid.visible = true;
+  for (const t of mainWorldTrees) t.visible = true;
+  for (const h of houses) h.group.visible = true;
+  if (directorLairGroup) directorLairGroup.visible = false;
 
   // Возвращаем оружие и прячем костюм
   for (const k in weaponMeshes) weaponMeshes[k].visible = true;
